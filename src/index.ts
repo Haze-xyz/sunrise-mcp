@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * Sunrise MCP server: six tools over stdio, backed by the console endpoint client (endpoint.ts),
- * the Windows game/log helpers (game.ts), and the title-screen key-press helpers (keys.ts). See
- * README.md for the WSL-vs-Windows constraint — this process must be run by Windows node.exe, not
- * WSL node.
+ * the Windows game/log helpers (game.ts), the title-screen key-press helpers (keys.ts), game_enter's
+ * pure branch-selection logic (game-enter-decision.ts), destiny2.exe process lookup (tasklist.ts),
+ * and its durable press record (press-record.ts). See README.md for the WSL-vs-Windows constraint —
+ * this process must be run by Windows node.exe, not WSL node.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -23,6 +24,7 @@ import {
 } from './keys.js';
 import { decideGameEnterAction } from './game-enter-decision.js';
 import { getGameProcessInfo } from './tasklist.js';
+import { clearPressRecord, isPressRecordFresh, readPressRecord, writePressRecord } from './press-record.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -67,15 +69,6 @@ function errorResult(err: unknown): CallToolResult {
 /** True once the world-load line lands in sunrise.log; not measured precisely, so this leaves a lot
  *  of headroom rather than pretending to a number that hasn't actually been timed. */
 const WORLD_LOAD_TIMEOUT_MS = 120_000;
-
-/** The pid of the destiny2.exe process this server has already pressed Enter for during its own
- *  lifetime, or null if it hasn't (or the last time this was checked, the game wasn't running). This
- *  is the only positive evidence available to distinguish a game genuinely still sitting, unpressed,
- *  at the title screen from one this server already pressed and is still loading -- both look
- *  identical in sunrise.log (see game-enter-decision.ts). Deliberately in-process, not persisted: a
- *  server restart loses it, which is an accepted, documented limitation (see README.md), not a gap
- *  this fix claims to close. */
-let pressedForPid: number | null = null;
 
 const server = new McpServer({ name: 'sunrise-mcp', version: '0.1.0' });
 
@@ -213,14 +206,23 @@ server.registerTool(
     try {
       const logPath = getLogPath();
       const proc = await getGameProcessInfo();
-      if (!proc.running) pressedForPid = null; // invalidate: whatever we remembered no longer applies.
+      if (!proc.running) await clearPressRecord(); // invalidate: whatever we recorded no longer applies.
 
       // See game-enter-decision.ts for the branch-selection logic itself and why each of these
       // observations is exactly what's needed (no more, no less) to decide what to do next.
       const worldMarkerPresent = proc.running ? await waitForLogMarker(WORLD_LOADED_MARKER, 0, logPath) : false;
       const titleMarkerPresent =
         proc.running && !worldMarkerPresent ? await waitForLogMarker(TITLE_SCREEN_MARKER, 0, logPath) : false;
-      const pressedThisSession = proc.running && proc.pid !== null && pressedForPid === proc.pid;
+
+      // Durable, not in-process: see press-record.ts for why an in-process-only record (the previous
+      // round's approach) doesn't survive an MCP server restart, and the finding was never scoped to
+      // one server process's uptime.
+      let pressedThisSession = false;
+      if (proc.running && proc.pid !== null) {
+        const record = await readPressRecord();
+        const logSizeNow = await currentLogSize(logPath);
+        pressedThisSession = isPressRecordFresh(record, proc.pid, logSizeNow);
+      }
 
       const decision = decideGameEnterAction({
         running: proc.running,
@@ -249,7 +251,7 @@ server.registerTool(
           });
 
         case 'resumeWorldWait': {
-          // This server already pressed Enter for this exact pid earlier (pressedForPid matched) --
+          // A durable record shows this server already pressed Enter for this exact pid earlier --
           // pressing again would risk a second, spurious keystroke into whatever the game is
           // currently showing. Resume waiting for the world to finish loading instead; no fresh
           // offset needed here since WORLD_LOADED_MARKER was just proven absent above, so anything
@@ -274,7 +276,7 @@ server.registerTool(
           if (launch.status !== 'launched') return fail(stage, launch.message);
           // launchGame()'s own PowerShell script normally reports the pid directly, but fall back to
           // asking tasklist (the same mechanism getGameProcessInfo() already uses) if it didn't, so a
-          // rare parsing gap on the launch side doesn't quietly cost this the pressedForPid record
+          // rare parsing gap on the launch side doesn't quietly cost this the press record written
           // below -- that record is the only thing that later stops a retry from re-pressing.
           currentPid = launch.pid ?? (await getGameProcessInfo()).pid;
           // launchGame() kills any existing process and starts a new one, but reuses the same
@@ -303,14 +305,15 @@ server.registerTool(
       const preKeyPressOffset = await currentLogSize(logPath);
       const press = await pressTitleScreenKey();
       if (press.status !== 'sent') return fail(stage, press.message);
-      // Record that we pressed for this pid, so a retry from this same server against the same
-      // process knows to skip straight to resumeWorldWait instead of pressing again. If the pid
-      // still couldn't be determined even after the launch-path fallback above, this degrades to a
-      // real (if narrow) residual risk rather than a fabricated safe one: a later retry, if tasklist
-      // manages to determine the pid by then, would see no matching record and re-press. There is no
-      // way to close that without a positive record to check against, which is exactly what's
-      // missing in this corner.
-      if (currentPid !== null) pressedForPid = currentPid;
+      // Persist that we pressed for this pid, keyed to the log's size right now (before this press's
+      // own effects land), so a retry -- from this server or, after a restart, a fresh one -- can
+      // recognize the same still-running session and resume waiting instead of pressing again. If
+      // the pid still couldn't be determined even after the launch-path fallback above, this degrades
+      // to a real (if narrow) residual risk rather than a fabricated safe one: a later retry, if
+      // tasklist manages to determine the pid by then, would find no matching record and re-press.
+      // There is no way to close that without a positive record to check against, which is exactly
+      // what's missing in this corner.
+      if (currentPid !== null) await writePressRecord({ pid: currentPid, logSizeAtPress: preKeyPressOffset });
 
       stage = 'worldLoad';
       const enteredWorld = await waitForLogMarker(WORLD_LOADED_MARKER, WORLD_LOAD_TIMEOUT_MS, logPath, preKeyPressOffset);

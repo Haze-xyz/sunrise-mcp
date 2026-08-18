@@ -28,9 +28,10 @@ export interface GameEnterObservation {
    *  this decision to consider, and so the test table can pin that "doesn't matter here" invariant
    *  explicitly instead of leaving it unstated. */
   titleMarkerPresent: boolean;
-  /** Whether THIS server process has a positive record of already pressing Enter for the exact pid
-   *  that is currently running (see index.ts's `pressedForPid`). Only meaningful when `running` and
-   *  `pidKnown` are both true. */
+  /** Whether a durable record shows this pid was already pressed for (see press-record.ts's
+   *  `isPressRecordFresh`, which the caller uses to compute this before calling this function).
+   *  Only meaningful when `running` and `pidKnown` are both true, and `worldMarkerPresent` is
+   *  false. */
   pressedThisSession: boolean;
 }
 
@@ -48,14 +49,17 @@ export type GameEnterAction =
  * justify that the game is sitting, unpressed, at the title screen. Absence of evidence that it has
  * moved on (WORLD_LOADED_MARKER missing) is NOT that justification by itself -- see the module doc
  * comment for why the log alone is ambiguous here. The only thing that can actually tell the
- * never-pressed case apart from the already-pressed-and-still-loading case is whether THIS server
- * already knows it pressed for this exact process (`pressedThisSession`): if so, the honest action
- * is to resume waiting for the world to load without pressing again ('resumeWorldWait'), never to
- * re-press. If the game's pid can't even be determined, there is no way to consult that memory at
- * all, so the honest action is to decline rather than guess ('decline') -- this is a defensive case
- * beyond the ones the review traced by hand, guarding against e.g. a `tasklist` output this code
- * fails to parse, where guessing wrong risks the exact spurious keystroke this whole function exists
- * to prevent.
+ * never-pressed case apart from the already-pressed-and-still-loading case is a durable record that
+ * THIS pid was already pressed for (`pressedThisSession`): if so, the honest action is to resume
+ * waiting for the world to load without pressing again ('resumeWorldWait'), never to re-press.
+ *
+ * `worldMarkerPresent` is checked before `pidKnown`: an already-loaded world needs no press at all,
+ * so a pid that can't be determined shouldn't stop that from being reported as `ok` -- there's
+ * nothing left to guess at. Only once a press might actually be needed does an undeterminable pid
+ * matter: there is then no way to consult the press record at all, so the honest action is to
+ * decline rather than guess ('decline') -- this is a defensive case beyond the ones the review
+ * traced by hand, guarding against e.g. a `tasklist` output this code fails to parse, where guessing
+ * wrong risks the exact spurious keystroke this whole function exists to prevent.
  *
  * `titleMarkerPresent` deliberately does not change the outcome on the `proceed` branch: whether or
  * not the marker happens to be there yet, the same next step applies -- wait for it (which is a
@@ -64,6 +68,8 @@ export type GameEnterAction =
  */
 export function decideGameEnterAction(obs: GameEnterObservation): GameEnterAction {
   if (!obs.running) return { kind: 'launch' };
+
+  if (obs.worldMarkerPresent) return { kind: 'shortCircuitOk' };
 
   if (!obs.pidKnown) {
     return {
@@ -74,8 +80,6 @@ export function decideGameEnterAction(obs: GameEnterObservation): GameEnterActio
         'whatever the game is currently showing.',
     };
   }
-
-  if (obs.worldMarkerPresent) return { kind: 'shortCircuitOk' };
 
   if (obs.pressedThisSession) return { kind: 'resumeWorldWait' };
 

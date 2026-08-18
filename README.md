@@ -125,22 +125,38 @@ and then timed out waiting for the world — the log shows exactly `TITLE_SCREEN
 log alone cannot tell these apart, so re-checking it harder was never going to close this; the
 world-loaded short-circuit doesn't fire (the world hasn't loaded), and the unanchored title check
 (needed to preserve the legitimate case above) matches the leftover title marker and presses again.
-The fix is a second, independent signal the log can't provide: `game_enter` now remembers, in
-process memory only, the pid of the destiny2.exe process it has already pressed Enter for this
-server's lifetime (invalidated the moment the game is next observed not running). A repeat call
-against the same still-running pid recognizes it already pressed and resumes waiting for the world to
-load without pressing again; a game whose pid can't even be determined (a `tasklist`-parsing edge
-case) is treated the same as genuinely ambiguous and declined rather than guessed at, surfaced as a
-new `ambiguous` failure stage. This memory is deliberately in-process and not persisted: a server
-restart loses it, which is an accepted, documented limitation, not a residual version of the bug —
-the two remaining failure modes it implies (a restarted server re-pressing a game it doesn't remember
-already pressed; two separate server processes both driving the same game) are outside what a
-single-process, single-driver tool like this one can solve without a log marker this project has no
-sample of and must not launch the game to go looking for. The whole decision — given whether the game
-is running, its pid is known, the world/title markers are present, and this server already pressed
-this session, what to do next — is pulled out of `index.ts` into a pure function,
-`decideGameEnterAction` in `src/game-enter-decision.ts`, precisely so it can be pinned by a table of
+The fix is a second, independent signal the log can't provide: `game_enter` remembers the pid of the
+destiny2.exe process it has already pressed Enter for. A repeat call against the same still-running
+pid recognizes it already pressed and resumes waiting for the world to load without pressing again; a
+game whose pid can't even be determined (a `tasklist`-parsing edge case, and only once a press might
+actually be needed — an already-loaded world reports `ok` regardless) is treated as genuinely
+ambiguous and declined rather than guessed at, surfaced as a new `ambiguous` failure stage. The whole
+decision — given whether the game is running, its pid is known, the world/title markers are present,
+and this pid was already pressed for, what to do next — is a pure function, `decideGameEnterAction`
+in `src/game-enter-decision.ts`, pulled out of `index.ts` precisely so it can be pinned by a table of
 cases instead of only reasoned about against real wiring that needs the actual game to run end to end.
+
+**That second fix's memory was in-process only, and a further re-review overruled calling that an
+accepted limitation.** A bare module variable is lost the instant the MCP server process itself
+restarts — a crash, a client reconnect, a rebuild during iteration — which is an ordinary event, not
+a rare one, and the game can easily still be mid-load when it happens; a `game_enter` call right after
+such a restart sees no record, falls through to the unanchored title check, and re-presses. The
+finding was never scoped to one server process's uptime, so this was a residual version of the same
+bug, not a genuinely different, acceptable one. The fix, in `src/press-record.ts`: the pid (and the
+log's byte size at the moment of the press) is written to a small durable file — `%LOCALAPPDATA%\
+sunrise-mcp\press-record.json`, falling back to the OS temp directory if `LOCALAPPDATA` isn't set —
+and read back on every `game_enter` call, so the record survives a restart. Deliberately not written
+anywhere inside the game's own directory, which would be surprising and could vanish on a reinstall.
+Guarding a durable record against staleness matters more than an in-process one did, since it can now
+outlive the very session it describes: if the log is now *smaller* than the size recorded at press
+time, the log was replaced (truncated or recreated) since, so the pid match cannot be trusted even
+though the number is the same — most plausibly Windows having reused the old pid for an unrelated,
+unpressed process. This is deliberately a size check, not a content one: nobody has measured what
+sunrise.log actually contains while sitting at the title screen versus while loading, and this
+project has already paid for two confident guesses about the game, so the fix does not add a third by
+inventing a "process started" marker it has never seen. `decideGameEnterAction` stays pure throughout
+this: it only ever sees the resulting boolean (`isPressRecordFresh`, also pure, computed by the
+caller from the already-fetched record, pid, and log size), never touches the file itself.
 
 The `INPUT` struct `press-title-screen-key.ps1` passes to `SendInput` is 40 bytes on x64. A
 declaration missing the two trailing `int` padding fields comes out 32 bytes, and `SendInput` then
@@ -255,32 +271,52 @@ game — see "Design notes and known limits" below.
 `game_enter`'s own decision of what to do next — launch, short-circuit to `ok`, press then wait,
 resume waiting without pressing, or decline — is pulled out of `index.ts` into a pure function,
 `decideGameEnterAction` in `src/game-enter-decision.ts`. It takes nothing but plain booleans (is the
-game running, is its pid known, is the world marker present, is the title marker present, did this
-server already press this session) and returns which action to take, with no file reads, no process
-checks, and no `SendInput` — which is what makes it testable directly, with a plain table of cases,
-in `scripts/game-enter-decision-smoke.mjs`:
+game running, is its pid known, is the world marker present, is the title marker present, was this
+pid already pressed for) and returns which action to take, with no file reads, no process checks, and
+no `SendInput` — which is what makes it testable directly, with a plain table of cases. The
+staleness check behind that last boolean, `isPressRecordFresh` in `src/press-record.ts`, is pure too
+(it only compares values the caller already fetched), while the record's actual read/write/clear live
+in the same file as real (if small and cheap) file I/O, tested the same no-mock way
+`keys-smoke.mjs` tests `waitForTitleScreen` — against a real temp file, not a fake. All of it is in
+`scripts/game-enter-decision-smoke.mjs`:
 
 ```
 npm run test:keys   # also runs scripts/game-enter-decision-smoke.mjs, after keys-smoke.mjs
 ```
 
-The table covers the five situations traced by hand in the review that found the repeat-call gap
-(not running; already fully past the title screen; already pressed this session and still loading —
-the finding itself; never pressed, title marker present; never pressed, title marker absent) plus one
-defensive case beyond them (the game's pid can't be determined) and one priority check (a world
-already loaded always wins over a stale press record, even if both are true at once). It was
-deliberately broken to confirm it can actually fail: with the "already pressed this session" check
-removed (reverting to the exact bug the review found — a repeat call always proceeds to press,
-whether or not this server already pressed), the finding's own case failed as expected (`11/12
-passed`, exit code 1) while every other case still passed, then all twelve passed again once
-restored. The same script also checks `parseTasklistCsv` (`src/tasklist.ts`) against real
-`tasklist.exe` output captured live during this review round: a genuine "not found" `INFO:` line, the
-exact CSV shape a match takes, and an unparseable pid field falling back to `pid: null` rather than
-throwing or guessing. See `task-3-report.md`'s second fix report for the full pasted output.
+`decideGameEnterAction`'s table covers the five situations traced by hand in the review that found
+the repeat-call gap, one defensive case beyond them (the game's pid can't be determined), and two
+priority checks: a world already loaded always wins over a stale press record, and — fixed in the
+third review round, since a `tasklist` pid hiccup on a game that's already fully in orbit has nothing
+left to press and shouldn't report `ambiguous` — also wins over an undeterminable pid. `isPressRecordFresh`'s
+table covers no record, a record for a different pid, a record for the same pid the log has only
+grown past (fresh), and a record for the same pid the log has since shrunk below (stale). The
+persistence functions are checked round-tripping a record through a real temp file, overwriting
+rather than merging on a second write, leaving no leftover `.tmp` file behind (the atomic
+write-then-rename works), treating a corrupt or wrongly-shaped file as no record rather than
+throwing, and creating their parent directory on first use.
 
-What this still cannot prove without the real game: that `getGameProcessInfo()`'s live `tasklist`
-call and the actual `SendInput` press interact correctly end to end, and in particular whether the
-in-process pid memory behaves as intended against a real relaunch or a real world-load sequence.
+Two rounds of deliberate breaks confirm this can actually fail, not just pass. First (second review
+round): with the "already pressed this session" check removed from `decideGameEnterAction`
+(reverting to the exact bug the review found — a repeat call always proceeds to press, whether or not
+this server already pressed), the finding's own case failed as expected (`11/12 passed`, exit code
+1) while every other case still passed, then all twelve passed again once restored. Second (third
+review round, the durable-record fix): with `isPressRecordFresh`'s log-size staleness guard removed
+(a same-pid record trusted regardless of whether the log has since shrunk), the "log is now SMALLER
+than recorded -> stale" case failed as expected (`24/25 passed`, exit code 1), then all cases passed
+again once restored. See `task-3-report.md`'s fix reports for the full pasted output of both rounds.
+
+The same script also checks `parseTasklistCsv` (`src/tasklist.ts`) against real `tasklist.exe`
+output captured live during the second review round: a genuine "not found" `INFO:` line, the exact
+CSV shape a match takes, and an unparseable pid field falling back to `pid: null` rather than
+throwing or guessing.
+
+What none of this can prove without the real game: that `getGameProcessInfo()`'s live `tasklist`
+call and the actual `SendInput` press interact correctly end to end, that the durable press record
+behaves as intended across a real MCP server restart or a real relaunch, and in particular the one
+residual this round's fix does not fully close (see "Getting past the title screen" above): Windows
+pid reuse for a genuinely different, unpressed game session, when the engine doesn't truncate
+sunrise.log on a fresh start and no server ever observes the game not running in between.
 
 ## Testing against a live game
 
@@ -421,8 +457,13 @@ from this exact script (it did in the original probe, run by hand, not through t
 - `src/game-enter-decision.ts` — `decideGameEnterAction`, the pure branch-selection logic behind
   `game_enter`, extracted so it can be tested with a table of cases. See "Testing game_enter's branch
   selection without the game or the filesystem" above.
+- `src/press-record.ts` — the durable record of which pid `game_enter` already pressed Enter for
+  (`readPressRecord`/`writePressRecord`/`clearPressRecord`) and the pure staleness check that turns
+  it into `decideGameEnterAction`'s `pressedThisSession` input (`isPressRecordFresh`). Survives an
+  MCP server restart, unlike the in-process variable it replaced. See "Getting past the title screen"
+  above.
 - `src/index.ts` — the MCP server: six tools over stdio, wiring `endpoint.ts`, `game.ts`, `keys.ts`,
-  `tasklist.ts`, and `game-enter-decision.ts` together.
+  `tasklist.ts`, `game-enter-decision.ts`, and `press-record.ts` together.
 - `scripts/launch-game.ps1` — launch + window-wait, adapted from
   `a local capture script` (same kill-existing /
   `Start-Process -PassThru` / poll-`MainWindowHandle` shape; the capture/dump/close steps that
