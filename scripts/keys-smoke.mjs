@@ -25,9 +25,12 @@
  * repeat call, which is exactly what let game_enter re-press Enter into a game that had already
  * loaded a world and falsely report 'ok'. See index.ts's game_enter for how this is actually used.
  *
- * pressTitleScreenKey() is not covered here -- it shells out to a real destiny2.exe process check
- * and (with the game running) SendInput, neither of which this script can safely fake. Its no-game
- * branch is exercised separately; see the task report for how.
+ * pressTitleScreenKey() itself is not covered here -- it shells out to a real destiny2.exe process
+ * check and (with the game running) SendInput, neither of which this script can safely fake. What
+ * IS covered is interpretPressKeyOutput(), the pure half it delegates to: the part that decides
+ * which route ran, whether the press counts as sent, and what a caller is told. That decision is
+ * what an agent branches on when this breaks, so it is tested against the exact JSON shapes
+ * press-title-screen-key.ps1 emits.
  */
 
 import assert from 'node:assert/strict';
@@ -35,7 +38,13 @@ import { mkdtemp, appendFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { waitForTitleScreen, waitForLogMarker, currentLogSize, TITLE_SCREEN_MARKER } from '../dist/keys.js';
+import {
+  waitForTitleScreen,
+  waitForLogMarker,
+  currentLogSize,
+  interpretPressKeyOutput,
+  TITLE_SCREEN_MARKER,
+} from '../dist/keys.js';
 
 /** @type {{ name: string; ok: boolean; error?: string }[]} */
 const results = [];
@@ -153,6 +162,87 @@ async function main() {
         assert.ok(freshElapsed < 100, `expected an immediate true (it was already there), took ${freshElapsed.toFixed(1)}ms`);
       },
     );
+
+    // ---------------------------------------------------------------- interpretPressKeyOutput
+    // Each input below is a literal line press-title-screen-key.ps1 emits, so these break if the
+    // script's JSON and this parser ever drift apart.
+
+    await test('names the sendInput route on a successful press, and reports the foreground was confirmed', () => {
+      const result = interpretPressKeyOutput(
+        '{"status":"sent","route":"sendInput","hwnd":"0x170E5E","alreadyForeground":false,' +
+          '"setForegroundResult":true,"foregroundIsGame":true,"down":1,"up":1}\n',
+      );
+      assert.equal(result.status, 'sent');
+      assert.equal(result.route, 'sendInput');
+      assert.equal(result.foregroundIsGame, true);
+      assert.equal(result.down, 1);
+      assert.equal(result.up, 1);
+    });
+
+    await test('reports the postMessage fallback as its own route and does not claim the press worked', () => {
+      const result = interpretPressKeyOutput(
+        '{"status":"sent","route":"postMessage","hwnd":"0x170E5E","alreadyForeground":false,' +
+          '"setForegroundResult":false,"foregroundIsGame":false,"postedDown":true,"postedUp":true}\n',
+      );
+      assert.equal(result.status, 'sent');
+      assert.equal(result.route, 'postMessage', 'the fallback must be distinguishable from the primary route');
+      assert.equal(result.foregroundIsGame, false);
+      // A caller reading only `status` would think the title screen moved; the message is where
+      // "this engine does not react to posted key messages" has to be said.
+      assert.match(result.message, /PostMessage/);
+      assert.match(result.message, /has most likely not moved/);
+    });
+
+    await test('treats a zero SendInput count as a failure, not a success, and still names the route', () => {
+      const result = interpretPressKeyOutput(
+        '{"status":"sent","route":"sendInput","foregroundIsGame":true,"down":0,"up":0}\n',
+      );
+      assert.equal(result.status, 'failed');
+      assert.equal(result.route, 'sendInput');
+      assert.match(result.message, /down=0 up=0/);
+    });
+
+    await test("surfaces the script's own null-keystroke guard verbatim instead of a generic failure", () => {
+      const guardMessage = 'the INPUT struct came out with wVk=0 instead of 13; SendInput would have injected a null keystroke.';
+      const result = interpretPressKeyOutput(
+        `{"status":"failed","route":"sendInput","hwnd":"0x170E5E","error":${JSON.stringify(guardMessage)}}\n`,
+      );
+      assert.equal(result.status, 'failed');
+      assert.equal(result.route, 'sendInput');
+      assert.equal(result.message, guardMessage);
+    });
+
+    await test('reports the no-game case cleanly, with no route (nothing was attempted)', () => {
+      const result = interpretPressKeyOutput('{"status":"no-game"}\n');
+      assert.equal(result.status, 'no-game');
+      assert.equal(result.route, undefined);
+    });
+
+    await test('returns null when nothing parses, so the caller can tell that apart from an outcome', () => {
+      assert.equal(interpretPressKeyOutput(''), null);
+      assert.equal(interpretPressKeyOutput('powershell blew up\nAt line:1 char:1\n'), null);
+      // Valid JSON, but not a result line: a bare array, and an object with no status at all.
+      assert.equal(interpretPressKeyOutput('[1,2,3]\n{"hwnd":"0x1"}\n'), null);
+    });
+
+    await test('finds the result line among PowerShell noise, scanning from the end', () => {
+      const result = interpretPressKeyOutput(
+        'WARNING: something chatty\n' +
+          '{"status":"no-game"}\n' +
+          'more noise that is not JSON\n' +
+          '{"status":"sent","route":"sendInput","foregroundIsGame":true,"down":1,"up":1}\n' +
+          'trailing noise\n',
+      );
+      assert.equal(result.status, 'sent', 'the LAST result line wins, not the first one in the file');
+      assert.equal(result.route, 'sendInput');
+    });
+
+    await test('rejects an unknown route rather than handing a caller a name it cannot branch on', () => {
+      // A future script that grew a third route without this parser learning about it must not slip
+      // through as a valid result: callers switch on `route`, and an unmodelled value would fall
+      // through every branch silently.
+      assert.equal(interpretPressKeyOutput('{"status":"sent","route":"keybdEvent","down":1,"up":1}\n'), null);
+    });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

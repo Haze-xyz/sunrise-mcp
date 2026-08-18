@@ -65,24 +65,79 @@ left: the console endpoint answers from the title screen, but nothing could get 
 run against the real game on 2026-08-18 measured two things that shape everything below:
 
 - **The DLL's key hook does not reach the title screen.** Holding VK_RETURN through the hook for
-  three seconds moved nothing. `SendInput` — an OS-level keystroke injected below the game entirely
-  — did, and the game went on to load all the way to `successfully changed world to: orbit_d2`.
+  three seconds moved nothing. An OS-level keystroke injected below the game entirely is the only
+  door open there.
 - **`game_launch` resolving is not a readiness signal.** It only waits for the game's window to
   exist, which the probe measured happening roughly 40s before the title screen can actually accept
   input — a keystroke sent right after `game_launch` returns is lost. The signal that actually works
   is the line `Entering state 'bootflow:start'` appearing in `sunrise.log`, measured at 8s after
   launch in that run; a keystroke sent after that line appears worked.
 
-**`SendInput` is used nowhere else in this project, and should not be.** It targets whatever window
-currently has OS foreground focus, not a specific one, so it would leak keystrokes into whatever the
-user has alt-tabbed to. Using it here is a deliberate, narrow exception: the title screen precedes
-every hook this project installs, so it is the *only* screen with no other way in, and it is only on
-screen for a few seconds right at startup — not something that stays true later in a session. The
-same reasoning is written in `scripts/press-title-screen-key.ps1` and `src/keys.ts`'s header comment.
+### What the 2026-08-18 re-measurement changed
+
+That first probe's `SendInput` was re-measured the same day, this time with every Win32 return value
+actually read instead of discarded, because pressing Enter had stopped working. Three findings, all
+now written into `scripts/press-title-screen-key.ps1`'s header:
+
+- **The script's `SendInput` was injecting a null keystroke.** It built the `INPUT` struct as
+  `$down.ki = New-Object ...KEYBDINPUT` followed by `$down.ki.wVk = 13`. PowerShell hands back a
+  boxed *copy* when you read a value-type field, so that write landed on the copy and was discarded;
+  marshalling the struct that actually reached `SendInput` gives `type=1 wVk=0 wScan=0`. The OS
+  accepts such an event and returns `1` for it, and nothing on the machine can react to it — which
+  is indistinguishable from "the game ignored us" unless someone dumps the bytes. The fix is to
+  populate the `KEYBDINPUT` in its own variable and assign it to `.ki` whole; a readback guard in the
+  script now fails the call loudly rather than injecting nothing if that ever regresses.
+- **`SetForegroundWindow` does fail from here — but that was not the bug.** Called on the game's
+  window from a PowerShell started out of WSL it returns `False`, and `GetForegroundWindow()` is
+  unchanged. The old code discarded that `False`. Even so, with the game genuinely in the foreground
+  the same broken `SendInput` still did nothing, so the foreground was never the cause.
+- **Posted window messages do not reach this engine's title screen at all.** `PostMessage` and
+  `SendMessage` of `WM_KEYDOWN`/`WM_KEYUP`/`WM_CHAR`, aimed at the visible `Tiger D3D Window`, at
+  the hidden `Tiger Input Window` the process also owns, and at both windows' thread queues via
+  `PostThreadMessage`, all returned success and none moved anything — with or without a faked
+  `WM_ACTIVATE`/`WM_SETFOCUS` first. That is the signature of Raw Input or DirectInput, which the OS
+  serves only to the foreground application. With the struct fixed, `SendInput` dismisses the title
+  screen instantly when the game holds the foreground and does nothing at all when it does not, both
+  measured on the same launch.
+
+**So `SendInput` is the primary route and `PostMessage` the fallback, and the result names which one
+ran** (`PressResult.route`, surfaced by `game_enter` as `route` in its response). `postMessage` in a
+result means the foreground could not be taken, and — given the measurement above — that the press
+most likely did nothing; that name is what someone reads when this breaks again.
+
+**The keystroke-leak defect layer 2 accepted is gone.** `SendInput` targets whatever window has OS
+foreground focus, so layer 2 knowingly accepted that a press could land in whatever the user had
+alt-tabbed to. The script now brings the game window to the front (minimize → restore →
+`SetForegroundWindow`, because a bare `SetForegroundWindow` is refused but restoring a minimized
+window is permitted) and injects **only** once `GetForegroundWindow()` has been read back and found
+to be the game's own window. If the foreground cannot be taken it injects nothing at all and posts to
+the HWND instead, which can't leak either. What it costs instead is that the game window is pulled to
+the front — unavoidable for this engine, and it needs no human, which is the property that matters.
+
+**Windows agreeing the window is foreground is not the same as the engine having re-acquired the
+keyboard.** Pressing the instant `GetForegroundWindow()` first agreed, right after the
+minimize/restore, was accepted by the OS (`down=1 up=1`) and ignored by the game, which then sat on
+the title screen until `game_enter`'s world-load wait timed out 120s later. The script therefore
+settles 1200ms after taking the foreground — the value measured working across the restore — and
+re-reads the foreground once more before injecting, in case something took it back during the wait.
+With that settle in place: three consecutive cold `game_enter` runs and three runs where the game was
+deliberately pushed into the background first all dismissed the title screen, none failed.
+
+**Residual, worth knowing before you debug this at 3am.** That settle is a measured number, not a
+proof, and this is a timing-sensitive interaction with a game engine. If a press is ever accepted by
+the OS and ignored by the game again, `game_enter` fails at stage `worldLoad` naming the `sendInput`
+route — and a bare `game_enter` retry will *not* press again, because the press record correctly says
+this pid was already pressed (see the repeat-call finding below). The way out is `game_kill` then
+`game_enter`, which clears the record; the failure message says so.
+
+**`SendInput` is still used nowhere else in this project, and should not be.** Using it here is a
+deliberate, narrow exception: the title screen precedes every hook this project installs, so it is
+the *only* screen with no other way in.
 
 `game_enter` composes this into one tool: launch if the game isn't already running (checked via
 `tasklist`, so a game already sitting past the title screen isn't needlessly killed and restarted),
-wait for the `bootflow:start` marker, press Enter via `SendInput`, then wait for the
+wait for the `bootflow:start` marker, take and verify the foreground, press Enter via `SendInput`
+(falling back to `PostMessage` if the foreground could not be taken), then wait for the
 `successfully changed world to: orbit_d2` line. **It leaves the game at the character-selection
 screen** — choosing a character is a separate tool, not yet built. On failure it reports which stage
 it stopped at (`launch`, `titleScreen`, `keyPress`, `worldLoad`, or `ambiguous` — see below), since
@@ -182,13 +237,19 @@ declaration missing the two trailing `int` padding fields comes out 32 bytes, an
 silently returns `0` — no exception, no `GetLastError` anyone sees — instead of throwing; this cost
 the original probe two attempts before the 40-byte layout was found to be the fix. `down`/`up`
 counts of `0` are treated as an explicit failure on the TypeScript side (`pressTitleScreenKey`
-returns `status: 'failed'`), not folded into `'sent'`. The script emits its result via
+returns `status: 'failed'`), not folded into `'sent'`. That struct has now bitten this project
+twice, the second time through PowerShell rather than through the layout — see
+"What the 2026-08-18 re-measurement changed" above — which is why the script reads the key code back
+out of the struct it is about to marshal and refuses to call `SendInput` at all if it comes out `0`.
+The script emits its result via
 `[Console]::Out.WriteLine`, never `Write-Output`, for the same reason `launch-game.ps1` does:
 PowerShell's success-stream formatter wraps long lines at the console width, and a parser that reads
 only the last line would get a truncated fragment instead of the whole JSON object — `keys.ts`'s
 `parsePressKeyOutput` mirrors `game.ts`'s `parseLaunchOutput` and scans backwards from the end of
 stdout for the first line that actually parses as its expected shape, rather than trusting it's
-strictly the last line printed.
+strictly the last line printed. Turning that parsed line into a `PressResult` is
+`interpretPressKeyOutput`, kept pure and exported precisely so the keys smoke test can drive every
+branch — including the route naming a caller switches on — without a running game.
 
 ## Building
 
@@ -268,6 +329,17 @@ building block `game_enter`'s already-past-the-title-screen short-circuit relies
 the repeat-call idempotency finding described above — that `sinceOffset` makes the wait ignore a
 marker already in the file before that offset was captured, matching only content appended after it.
 
+It also covers `interpretPressKeyOutput`, the pure half of `pressTitleScreenKey`: the sendInput
+route reporting a confirmed foreground; the postMessage fallback reported as its *own* route, with a
+message that refuses to imply the title screen moved; a zero `SendInput` count treated as a failure
+rather than a success; the script's own null-keystroke guard surfaced verbatim instead of behind a
+generic message; the `no-game` case carrying no route because nothing was attempted; `null` when
+nothing parses, so a killed process stays distinguishable from an outcome; the result line being
+found among PowerShell noise by scanning from the end; and an unknown route value rejected outright,
+since callers switch on that name and an unmodelled one would fall through every branch silently.
+Each of these is fed the literal JSON `press-title-screen-key.ps1` emits, so they break if the script
+and the parser ever drift apart.
+
 Both rounds of this test were deliberately broken to confirm they can actually fail. First round:
 with the poll loop temporarily replaced by a single immediate check (i.e. the wait removed), the
 "marker appended mid-wait" case failed as expected (`3/4 passed`, exit code 1) while the other three
@@ -278,12 +350,17 @@ before sinceOffset" case failed as expected (`6/7 passed`, exit code 1) while th
 passed, then all seven passed again once restored. See `task-3-report.md` for the pasted output of
 both rounds.
 
-`pressTitleScreenKey()` shells out to a real `destiny2.exe` process check and, with the game
-running, a real `SendInput` call — neither of which this repo fakes. Its `no-game` branch (the game
-not running) was instead verified directly: with `destiny2.exe` confirmed not running, calling it
-under real Windows `node.exe` returned `{"status":"no-game", ...}` cleanly rather than throwing, in
-about half a second. The `SendInput` path itself remains unproven until a session with the real
-game — see "Design notes and known limits" below.
+`pressTitleScreenKey()` itself shells out to a real `destiny2.exe` process check and, with the game
+running, real Win32 calls — neither of which this repo fakes. Its `no-game` branch (the game not
+running) was instead verified directly: with `destiny2.exe` confirmed not running, calling it under
+real Windows `node.exe` returned `{"status":"no-game", ...}` cleanly rather than throwing, in about
+half a second. The `SendInput` path is proven against the real game: on 2026-08-18, `game_enter`
+driven over stdio from a closed game returned
+`{"status":"ok","route":"sendInput","message":"The game reached the character-selection screen."}`
+in 40.1s, and `sunrise.log` shows `Entering state 'bootflow:start'` at `t=13797` followed by
+`Leaving state 'bootflow:start'` at `t=15031` — the press landing 1.2s later — then
+`successfully changed world to: orbit_d2` at `t=29172` and `Entering state 'character:signin'` at
+`t=32422`.
 
 ### Testing game_enter's branch selection without the game or the filesystem
 
@@ -338,8 +415,7 @@ output captured live during the second review round: a genuine "not found" `INFO
 CSV shape a match takes, and an unparseable pid field falling back to `pid: null` rather than
 throwing or guessing.
 
-What none of this can prove without the real game: that `getGameProcessInfo()`'s live `tasklist`
-call and the actual `SendInput` press interact correctly end to end, that the durable press record
+What none of this can prove without the real game: that the durable press record
 and its in-process cache behave as intended across a real MCP server restart or a real relaunch, and
 in particular the one residual documented above (see "Getting past the title screen"): Windows pid
 reuse for a genuinely different, unpressed game session, when the engine doesn't truncate
@@ -459,16 +535,16 @@ concurrent requests resolving to their own rows) passed in 0.22s; and the full a
 sequence — `game_launch` (window up, pid reported) → `console_describe` → `console_run` write →
 `console_run` read-back → `log_read` (real log content) → `game_kill` — passed end to end in
 20.9s, including `launchGame()`'s PowerShell JSON parsing working on the first try. Not yet
-exercised: the retry-on-connect-failure path (see "Retry policy" above), and — still true as of
-`game_enter` landing — the actual `SendInput` keystroke and the `game_enter` tool end to end. Task 3
-was built and tested entirely off-target (see `task-3-report.md`): `waitForTitleScreen`/
-`waitForLogMarker` were proven against a temp-file log under real polling and a deliberate-break
-falsification pass, and `pressTitleScreenKey()`'s `no-game` branch was proven under real Windows
-`node.exe` and real `powershell.exe` with `destiny2.exe` confirmed not running. What remains
-unproven until a session with the real game: that `SendInput` actually reaches the title screen
-from this exact script (it did in the original probe, run by hand, not through this code path), that
-`down`/`up` come back non-zero against the real window, and that `game_enter`'s full sequence
-(launch → title screen → keypress → world load → character selection) works end to end.
+exercised: the retry-on-connect-failure path (see "Retry policy" above).
+
+`game_enter`'s full sequence is now proven against the real game (2026-08-18, task 1 of the
+reverse-primitives plan). Driven over stdio from a closed game it answered
+`{"status":"ok","route":"sendInput","message":"The game reached the character-selection screen."}`
+in 40.1s, with `sunrise.log` showing `Entering state 'bootflow:start'` (`t=13797`) →
+`Leaving state 'bootflow:start'` (`t=15031`) → `successfully changed world to: orbit_d2`
+(`t=29172`) → `Entering state 'character:signin'` (`t=32422`). No human touched the keyboard, and
+`down`/`up` came back `1`/`1` from the real window. What that run also established is that the
+foreground is not optional for this engine — see "What the 2026-08-18 re-measurement changed".
 
 ## Project layout
 
@@ -476,7 +552,8 @@ from this exact script (it did in the original probe, run by hand, not through t
 - `src/game.ts` — Windows-side game process and log helpers (`game_launch`, `game_kill`,
   `log_read`), used by `index.ts`.
 - `src/keys.ts` — getting past the title screen: `waitForTitleScreen`/`waitForLogMarker` (poll
-  `sunrise.log` for a marker line) and `pressTitleScreenKey` (the `SendInput` keystroke). See
+  `sunrise.log` for a marker line), `pressTitleScreenKey` (the keystroke), and
+  `interpretPressKeyOutput` (its pure result-parsing half, which decides the route name). See
   "Getting past the title screen" above.
 - `src/tasklist.ts` — `getGameProcessInfo`/`parseTasklistCsv`: whether destiny2.exe is running and
   its pid, via `tasklist`. Split out from `index.ts` so the pure parsing logic is importable by a
@@ -497,7 +574,9 @@ from this exact script (it did in the original probe, run by hand, not through t
   `a local capture script` (same kill-existing /
   `Start-Process -PassThru` / poll-`MainWindowHandle` shape; the capture/dump/close steps that
   script also does are dropped, since `game_launch` wants the game left running).
-- `scripts/press-title-screen-key.ps1` — the `SendInput` script `pressTitleScreenKey` shells out to.
+- `scripts/press-title-screen-key.ps1` — the key-press script `pressTitleScreenKey` shells out to:
+  foreground the game and verify it, `SendInput`, else fall back to `PostMessage`. Its header carries
+  the full 2026-08-18 measurement.
 - `scripts/endpoint-smoke.mjs` — the fake-server test for `endpoint.ts` described above.
 - `scripts/keys-smoke.mjs` — the temp-log-file test for `waitForTitleScreen`/`waitForLogMarker`,
   described in "Testing keys.ts without the game".

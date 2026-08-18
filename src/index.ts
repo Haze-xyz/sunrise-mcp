@@ -188,9 +188,12 @@ server.registerTool(
       'character-selection screen: launches destiny2.exe if it is not already running, waits for sunrise.log\'s ' +
       `"${TITLE_SCREEN_MARKER}" line (the earliest reliable readiness signal -- game_launch itself returns ` +
       'roughly 40s before the title screen can actually accept input, so calling console_run or pressing a key ' +
-      'right after game_launch resolves does nothing), presses Enter as an OS-level SendInput keystroke (the ' +
-      'one place in this whole project that is legitimate, because the title screen precedes every key hook the ' +
-      'DLL installs), then waits for the log line marking the world finishing loading. Safe to call repeatedly ' +
+      'right after game_launch resolves does nothing), brings the game window to the foreground and confirms it ' +
+      'got there, presses Enter as an OS-level SendInput keystroke (the one place in this whole project that is ' +
+      'legitimate, because the title screen precedes every key hook the DLL installs, and this engine reads the ' +
+      'keyboard below the window message queue so nothing posted at its window reaches it), then waits for the ' +
+      'log line marking the world finishing loading. The response names the route the press actually took ' +
+      '(sendInput, or the postMessage fallback used when the foreground could not be taken). Safe to call repeatedly ' +
       'against an already-running game -- including after this MCP server itself restarts -- e.g. as a ' +
       'precondition before other tools: if a world has already loaded, it reports ok without pressing anything; ' +
       'if Enter was already pressed for this exact game process and the world is still loading, it resumes ' +
@@ -319,6 +322,9 @@ server.registerTool(
       const preKeyPressOffset = await currentLogSize(logPath);
       const press = await pressTitleScreenKey();
       if (press.status !== 'sent') return fail(stage, press.message);
+      // Which route delivered the press is what a reader needs first when this next breaks, so it
+      // travels with every outcome from here on -- the ok below and the worldLoad timeout alike.
+      const pressRoute = press.route ?? 'unknown';
       // Record that we pressed for this pid, keyed to the log's size right now (before this press's
       // own effects land): the in-process cache first, unconditionally -- a plain assignment cannot
       // fail, so a same-process retry is safe even if the file write right after it does -- then the
@@ -337,10 +343,25 @@ server.registerTool(
       stage = 'worldLoad';
       const enteredWorld = await waitForLogMarker(WORLD_LOADED_MARKER, WORLD_LOAD_TIMEOUT_MS, logPath, preKeyPressOffset);
       if (!enteredWorld) {
-        return fail(stage, `Timed out waiting for "${WORLD_LOADED_MARKER}" in sunrise.log after pressing Enter.`);
+        // Naming the route, and the way out, matters more here than anywhere else in this tool: a
+        // press the OS accepted but the game ignored looks identical to a slow load from here. The
+        // press record now says this pid was pressed, so calling game_enter again will resume
+        // waiting rather than press a second time (deliberately -- see the repeat-call finding in
+        // README.md); game_kill first is what clears that record and allows a fresh attempt.
+        return fail(
+          stage,
+          `Timed out waiting for "${WORLD_LOADED_MARKER}" in sunrise.log after pressing Enter via the ` +
+            `${pressRoute} route. ${press.message} If the game is still sitting on the title screen, the ` +
+            'keystroke was accepted by the OS but not by the game; call game_kill and then game_enter again, ' +
+            'since a bare game_enter retry will resume waiting instead of pressing again.',
+        );
       }
 
-      return textResult({ status: 'ok', message: 'The game reached the character-selection screen.' });
+      return textResult({
+        status: 'ok',
+        route: pressRoute,
+        message: 'The game reached the character-selection screen.',
+      });
     } catch (err) {
       const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       return fail(stage, message);

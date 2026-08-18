@@ -10,14 +10,29 @@
  * the DLL's own hook, which is installed once the game is far enough into its boot sequence to have
  * loaded Sunrise's code. A probe run against the real game on 2026-08-18 measured that the hook does
  * NOT reach the title screen: holding VK_RETURN through the hook for three seconds moved nothing.
- * `SendInput`, by contrast, worked immediately and the game went on to load all the way to
- * `successfully changed world to: orbit_d2`. The title screen precedes every hook this project
- * installs, so an OS-level keystroke is the only door open there.
+ * The title screen precedes every hook this project installs, so an OS-level keystroke is the only
+ * door open there.
  *
- * `SendInput` is deliberately not used anywhere else: it goes to whatever window currently has OS
- * foreground focus, not to a specific one, so it would leak keystrokes into whatever the user has
- * switched to. That is only acceptable here because the title screen is on screen for a few seconds
- * right at startup, and nowhere else in this project reaches for it.
+ * The measurement behind that choice was redone on 2026-08-18, this time reading every Win32 return
+ * value instead of discarding it, and it changed two things (see `press-title-screen-key.ps1`'s
+ * header for the full record):
+ *
+ * - The old script's `SendInput` never carried a key. PowerShell hands back a *copy* when you read
+ *   a value-type field, so its `$down.ki.wVk = 13` was thrown away and the struct marshalled to
+ *   `SendInput` held `wVk = 0` -- a null keystroke the OS reports as delivered. That, not the
+ *   foreground, is why pressing Enter stopped working.
+ * - `PostMessage`/`SendMessage` of WM_KEYDOWN/WM_KEYUP/WM_CHAR do not move this engine's title
+ *   screen at all -- not at the visible window, not at the hidden 'Tiger Input Window' the process
+ *   also owns, not at either window's thread queue. The engine reads the keyboard below the message
+ *   queue (Raw Input or DirectInput), which the OS serves only to the foreground application.
+ *
+ * So `SendInput` stays the primary route, and `PostMessage` is the fallback -- and the result says
+ * which one ran. What did change is that the script now *takes and verifies* the foreground before
+ * injecting anything. Layer 2's design knowingly accepted that `SendInput` goes to whatever window
+ * has focus, so a press could land in whatever the user had alt-tabbed to; that defect is gone,
+ * because the keystroke is injected only once `GetForegroundWindow()` has been read back and found
+ * to be the game's own window. If the foreground cannot be taken, nothing is injected at all and
+ * the script falls back to `PostMessage`, which targets a HWND and so cannot leak anywhere either.
  */
 
 import { execFile } from 'node:child_process';
@@ -136,28 +151,61 @@ export async function waitForTitleScreen(
   return waitForLogMarker(TITLE_SCREEN_MARKER, timeoutMs, logPath, sinceOffset);
 }
 
+/**
+ * Which of `press-title-screen-key.ps1`'s two routes delivered the keystroke. Callers branch on
+ * this, so it is a closed union rather than a free string: `'sendInput'` is the primary route and
+ * the only one measured to move the title screen; `'postMessage'` is the fallback the script takes
+ * when it could not bring the game to the foreground, which reaches the window but was measured not
+ * to move this engine's title screen. A result naming `postMessage` therefore means "the press
+ * probably did nothing, and here is exactly why" -- see this file's header comment.
+ */
+export type PressRoute = 'sendInput' | 'postMessage';
+
 export interface PressResult {
-  /** 'sent' means SendInput reported a non-zero down and up count; 'no-game' means destiny2.exe
-   *  was not running; 'failed' covers a zero down/up count or any other script-level problem. */
+  /** 'sent' means the named route reported delivering the keystroke; 'no-game' means destiny2.exe
+   *  was not running; 'failed' covers a zero SendInput count, a refused PostMessage, or any other
+   *  script-level problem. */
   status: 'sent' | 'no-game' | 'failed';
+  /** The route that ran. Absent only when nothing was attempted (no game) or the script produced
+   *  no parseable result at all. */
+  route?: PressRoute;
+  /** Whether the game's window actually held the OS foreground at the moment of the press. */
+  foregroundIsGame?: boolean;
   down?: number;
   up?: number;
   message: string;
 }
 
 interface PressKeyScriptOutput {
-  status: 'sent' | 'no-game';
+  status: 'sent' | 'no-game' | 'failed';
+  route?: PressRoute;
+  foregroundIsGame?: boolean;
   down?: number;
   up?: number;
+  postedDown?: boolean;
+  postedUp?: boolean;
+  error?: string;
+}
+
+function isOptionalType(record: Record<string, unknown>, key: string, type: 'number' | 'boolean' | 'string'): boolean {
+  if (!(key in record) || record[key] === undefined || record[key] === null) return true;
+  return typeof record[key] === type;
 }
 
 function isPressKeyScriptOutput(value: unknown): value is PressKeyScriptOutput {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
-  if (record.status !== 'sent' && record.status !== 'no-game') return false;
-  if ('down' in record && record.down !== undefined && typeof record.down !== 'number') return false;
-  if ('up' in record && record.up !== undefined && typeof record.up !== 'number') return false;
-  return true;
+  if (record.status !== 'sent' && record.status !== 'no-game' && record.status !== 'failed') return false;
+  if ('route' in record && record.route !== undefined && record.route !== 'sendInput' && record.route !== 'postMessage') {
+    return false;
+  }
+  for (const key of ['down', 'up'] as const) {
+    if (!isOptionalType(record, key, 'number')) return false;
+  }
+  for (const key of ['foregroundIsGame', 'postedDown', 'postedUp'] as const) {
+    if (!isOptionalType(record, key, 'boolean')) return false;
+  }
+  return isOptionalType(record, 'error', 'string');
 }
 
 /**
@@ -178,8 +226,81 @@ function parsePressKeyOutput(stdout: string): PressKeyScriptOutput | null {
   return null;
 }
 
-// The script's own worst case is well under two seconds (a 400ms foreground-settle sleep plus a
-// 250ms default hold), plus PowerShell startup overhead. This leaves generous headroom.
+/**
+ * Turns the script's stdout into a `PressResult`, or null if nothing in it parsed as a result line
+ * (which the caller distinguishes from a real outcome -- a killed process, a PowerShell error).
+ *
+ * Pure, and exported so the keys smoke test can drive every branch of it without a running game:
+ * the process spawn and the Win32 calls are what need the game, the interpretation of what they
+ * answered is not, and that interpretation is where the route name a caller branches on is decided.
+ */
+export function interpretPressKeyOutput(stdout: string): PressResult | null {
+  const parsed = parsePressKeyOutput(stdout);
+  if (!parsed) return null;
+
+  if (parsed.status === 'no-game') {
+    return { status: 'no-game', message: 'destiny2.exe is not running.' };
+  }
+
+  const route = parsed.route;
+
+  if (parsed.status === 'failed') {
+    return {
+      status: 'failed',
+      ...(route !== undefined ? { route } : {}),
+      message: parsed.error ?? 'press-title-screen-key.ps1 reported failure without a message.',
+    };
+  }
+
+  if (route === 'postMessage') {
+    // The script only takes this route when it could not bring the game to the foreground, and it
+    // reports 'sent' for it when both posts were accepted. Do not upgrade that into a claim the
+    // press worked: PostMessage was measured not to move this engine's title screen. Whether the
+    // game actually moved is decided by the log wait in game_enter, not here.
+    return {
+      status: 'sent',
+      route,
+      ...(parsed.foregroundIsGame !== undefined ? { foregroundIsGame: parsed.foregroundIsGame } : {}),
+      message:
+        'The game could not be brought to the foreground, so Enter was posted to its window with ' +
+        'PostMessage instead of injected with SendInput. That reaches the right window and leaks ' +
+        'nothing, but this engine was measured not to react to posted key messages, so the title ' +
+        'screen has most likely not moved.',
+    };
+  }
+
+  const down = parsed.down ?? 0;
+  const up = parsed.up ?? 0;
+  if (down === 0 || up === 0) {
+    // SendInput returning 0 with no thrown error is exactly the failure mode the 40-byte INPUT
+    // struct layout guards against (see press-title-screen-key.ps1) -- treat it as an explicit
+    // failure, not a success, rather than trusting the 'sent' status alone.
+    return {
+      status: 'failed',
+      route: 'sendInput',
+      down,
+      up,
+      message:
+        `SendInput reported down=${down} up=${up}; a zero count means the OS did not accept the ` +
+        'injected input (e.g. the target window blocking synthetic input).',
+    };
+  }
+
+  return {
+    status: 'sent',
+    route: 'sendInput',
+    // Reported, never assumed: this is the fact the whole no-leak argument rests on, so if the
+    // script ever stops saying it, the result says nothing rather than claiming it was confirmed.
+    ...(parsed.foregroundIsGame !== undefined ? { foregroundIsGame: parsed.foregroundIsGame } : {}),
+    down,
+    up,
+    message: 'Sent Enter to the game as an OS-level SendInput keystroke, with its window confirmed in the foreground.',
+  };
+}
+
+// The script's own worst case is about four seconds (400ms between minimize and restore, up to 2s
+// polling for the foreground to change, a 1.2s settle before injecting, then the 250ms default
+// hold), plus PowerShell startup overhead. This leaves generous headroom.
 const PRESS_KEY_TIMEOUT_MS = 15_000;
 
 function getModuleDir(): string {
@@ -194,12 +315,18 @@ function getPressKeyScriptPath(): string {
 }
 
 /**
- * Presses Enter on the game's foreground window via `SendInput` (see this file's header comment
- * for why `SendInput`, and only here). Resolves cleanly with `status: 'no-game'` if destiny2.exe is
- * not running, rather than throwing -- this branch is testable without the game.
+ * Presses Enter on the game, bringing its window to the foreground and confirming it got there
+ * first, then injecting the keystroke with `SendInput` -- falling back to `PostMessage` at the
+ * window if the foreground could not be taken. `PressResult.route` names which one ran. See this
+ * file's header comment for why that order, and why the foreground step is what removes the
+ * keystroke-leak defect rather than adding one.
  *
- * Not provable end-to-end without a running game: this only confirms the process spawns, parses its
- * output, and reports the no-game case cleanly.
+ * Resolves cleanly with `status: 'no-game'` if destiny2.exe is not running, rather than throwing --
+ * that branch is testable without the game.
+ *
+ * Not provable end-to-end without a running game: this only confirms the process spawns and reports
+ * the no-game case cleanly. The interpretation of what the script answered is `interpretPressKeyOutput`,
+ * which is pure and covered directly by the keys smoke test.
  */
 export function pressTitleScreenKey(): Promise<PressResult> {
   const scriptPath = getPressKeyScriptPath();
@@ -210,31 +337,9 @@ export function pressTitleScreenKey(): Promise<PressResult> {
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
       { timeout: PRESS_KEY_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
       (error, stdout, stderr) => {
-        const parsed = parsePressKeyOutput(stdout);
-        if (parsed) {
-          if (parsed.status === 'no-game') {
-            resolve({ status: 'no-game', message: 'destiny2.exe is not running.' });
-            return;
-          }
-
-          const down = parsed.down ?? 0;
-          const up = parsed.up ?? 0;
-          if (down === 0 || up === 0) {
-            // SendInput returning 0 with no thrown error is exactly the failure mode the 40-byte
-            // INPUT struct layout guards against (see press-title-screen-key.ps1) -- treat it as an
-            // explicit failure, not a success, rather than trusting the 'sent' status alone.
-            resolve({
-              status: 'failed',
-              down,
-              up,
-              message:
-                `SendInput reported down=${down} up=${up}; a zero count means the OS did not accept the ` +
-                'injected input (e.g. no foreground window, or the target window blocking synthetic input).',
-            });
-            return;
-          }
-
-          resolve({ status: 'sent', down, up, message: 'Sent Enter to the game as an OS-level SendInput keystroke.' });
+        const interpreted = interpretPressKeyOutput(stdout);
+        if (interpreted) {
+          resolve(interpreted);
           return;
         }
 
