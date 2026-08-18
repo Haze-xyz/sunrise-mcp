@@ -32,6 +32,17 @@
  * mistake with an explicit statement of what's NOT tested here, per the review's own preference for
  * an admitted gap over a false claim of coverage.)
  *
+ * A fourth review round found that the durable record alone reopened the same finding within a
+ * single, uninterrupted server process: writePressRecord never throws (an unwritable LOCALAPPDATA, a
+ * mkdir failure, a transient I/O error are all swallowed), so a silently failed write meant the next
+ * call in the same process found no record and re-pressed -- something the round-2 in-process
+ * variable this replaced could never do, since a plain assignment cannot fail. resolvePressedThisSession
+ * is the fix: an in-process cache checked first, gated by the same isPressRecordFresh check as the
+ * file, with the file only consulted -- across a restart -- when the cache doesn't already answer
+ * positively. Its own tests below specifically prove the cache alone is sufficient when the file
+ * layer is broken: a readRecord stub that throws if called is passed in, and a fresh cache still
+ * resolves true without ever invoking it.
+ *
  * parseTasklistCsv is tested against real tasklist.exe output captured during the second review round
  * (see task-3-report.md): a genuine "not found" INFO line, and the exact CSV shape a match takes
  * (verified live against a real running process, with the image name substituted).
@@ -43,7 +54,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { decideGameEnterAction } from '../dist/game-enter-decision.js';
 import { parseTasklistCsv } from '../dist/tasklist.js';
-import { clearPressRecord, isPressRecordFresh, readPressRecord, writePressRecord } from '../dist/press-record.js';
+import { clearPressRecord, isPressRecordFresh, readPressRecord, resolvePressedThisSession, writePressRecord } from '../dist/press-record.js';
 
 /** @type {{ name: string; ok: boolean; error?: string }[]} */
 const results = [];
@@ -156,6 +167,44 @@ async function main() {
     // The log was replaced (truncated or recreated) since this record was written -- it can no
     // longer refer to whatever session is running now, even though the pid happens to match.
     assert.equal(isPressRecordFresh({ pid: 1234, logSizeAtPress: 5000 }, 1234, 100), false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // resolvePressedThisSession: the fourth-round fix. A readRecord stub that throws if called stands
+  // in for "the file layer is completely broken" (which is exactly what a silently failed
+  // writePressRecord looks like from here) -- these cases prove the in-process cache is sufficient
+  // entirely on its own when it's fresh, never needing to fall through to the file at all.
+  // ---------------------------------------------------------------------------
+
+  const readRecordMustNotBeCalled = async () => {
+    throw new Error('readRecord should not have been called: a fresh cache must short-circuit before touching the file');
+  };
+
+  await test(
+    'resolvePressedThisSession: a fresh cache is trusted on its own, without ever consulting the file ' +
+      '(simulates a press whose durable write silently failed -- the cache is what still stops a re-press)',
+    async () => {
+      const fresh = await resolvePressedThisSession({ pid: 1234, logSizeAtPress: 100 }, 1234, 5000, readRecordMustNotBeCalled);
+      assert.equal(fresh, true);
+    },
+  );
+
+  await test('resolvePressedThisSession: no cache (or a stale one) falls back to the file, and a fresh file record is trusted', async () => {
+    const freshFromFile = await resolvePressedThisSession(null, 1234, 5000, async () => ({ pid: 1234, logSizeAtPress: 100 }));
+    assert.equal(freshFromFile, true);
+  });
+
+  await test('resolvePressedThisSession: no cache and no usable file record -> not fresh', async () => {
+    const notFresh = await resolvePressedThisSession(null, 1234, 5000, async () => null);
+    assert.equal(notFresh, false);
+  });
+
+  await test('resolvePressedThisSession: a stale cache (wrong pid) falls back to the file rather than trusting itself', async () => {
+    const fresh = await resolvePressedThisSession({ pid: 9999, logSizeAtPress: 100 }, 1234, 5000, async () => ({
+      pid: 1234,
+      logSizeAtPress: 100,
+    }));
+    assert.equal(fresh, true);
   });
 
   // ---------------------------------------------------------------------------

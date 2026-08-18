@@ -158,6 +158,25 @@ inventing a "process started" marker it has never seen. `decideGameEnterAction` 
 this: it only ever sees the resulting boolean (`isPressRecordFresh`, also pure, computed by the
 caller from the already-fetched record, pid, and log size), never touches the file itself.
 
+**That third fix's own diff reopened the harmful direction, this time within a single, uninterrupted
+server process — no restart needed.** `writePressRecord` never throws: an unwritable
+`%LOCALAPPDATA%`, a `mkdir` failure, or a transient I/O error is caught and only logged to stderr.
+`game_enter` called it fire-and-forget, without checking success. The round-2 in-process variable
+this replaced could never fail to record a press within a process's own lifetime — a plain assignment
+cannot fail the way a file write can — so making that guarantee depend entirely on a disk write
+succeeding was a real regression, found on a fourth review round. If the write silently failed,
+`readPressRecord` on the very next call *in the same process* found no record, `pressedThisSession`
+was false, and a second spurious `SendInput` went into the loading screen. The fix keeps the
+in-process variable after all, but as a first-line *cache* alongside the durable file rather than
+instead of it: `cachedPressRecord` in `index.ts` is set unconditionally right after a successful
+press, before the file write is even attempted, so a broken disk write cannot cost it. Reading it
+back goes through `resolvePressedThisSession` in `press-record.ts`, which checks the cache first and
+only reads the file if the cache doesn't already answer positively — the durable record still carries
+the restart case, the cache still carries the same-process case, and neither depends on the other
+succeeding. Both are gated by the identical `isPressRecordFresh` pid+log-size check, and both are
+cleared together the moment the game is observed not running, so the two sources can never disagree
+in a way that resurrects a record for a game session it doesn't actually belong to.
+
 The `INPUT` struct `press-title-screen-key.ps1` passes to `SendInput` is 40 bytes on x64. A
 declaration missing the two trailing `int` padding fields comes out 32 bytes, and `SendInput` then
 silently returns `0` — no exception, no `GetLastError` anyone sees — instead of throwing; this cost
@@ -290,13 +309,17 @@ priority checks: a world already loaded always wins over a stale press record, a
 third review round, since a `tasklist` pid hiccup on a game that's already fully in orbit has nothing
 left to press and shouldn't report `ambiguous` — also wins over an undeterminable pid. `isPressRecordFresh`'s
 table covers no record, a record for a different pid, a record for the same pid the log has only
-grown past (fresh), and a record for the same pid the log has since shrunk below (stale). The
-persistence functions are checked round-tripping a record through a real temp file, overwriting
-rather than merging on a second write, leaving no leftover `.tmp` file behind (the atomic
-write-then-rename works), treating a corrupt or wrongly-shaped file as no record rather than
-throwing, and creating their parent directory on first use.
+grown past (fresh), and a record for the same pid the log has since shrunk below (stale).
+`resolvePressedThisSession`'s table (fourth review round) covers a fresh cache trusted entirely on
+its own — proven by passing it a `readRecord` stub that *throws if called*, so a passing test proves
+the file was never even touched, not just that the right answer came back — a stale or missing cache
+correctly falling back to a fresh file record, both being absent, and a stale cache still falling back
+to the file rather than being trusted for merely existing. The persistence functions are checked
+round-tripping a record through a real temp file, overwriting rather than merging on a second write,
+leaving no leftover `.tmp` file behind (the atomic write-then-rename works), treating a corrupt or
+wrongly-shaped file as no record rather than throwing, and creating their parent directory on first use.
 
-Two rounds of deliberate breaks confirm this can actually fail, not just pass. First (second review
+Three rounds of deliberate breaks confirm this can actually fail, not just pass. First (second review
 round): with the "already pressed this session" check removed from `decideGameEnterAction`
 (reverting to the exact bug the review found — a repeat call always proceeds to press, whether or not
 this server already pressed), the finding's own case failed as expected (`11/12 passed`, exit code
@@ -304,7 +327,11 @@ this server already pressed), the finding's own case failed as expected (`11/12 
 review round, the durable-record fix): with `isPressRecordFresh`'s log-size staleness guard removed
 (a same-pid record trusted regardless of whether the log has since shrunk), the "log is now SMALLER
 than recorded -> stale" case failed as expected (`24/25 passed`, exit code 1), then all cases passed
-again once restored. See `task-3-report.md`'s fix reports for the full pasted output of both rounds.
+again once restored. Third (fourth review round, the cache fix): with `resolvePressedThisSession`'s
+cache short-circuit removed (always falling through to the file, exactly the regression this round
+fixes), the "fresh cache trusted on its own" case failed as expected — its `readRecord` stub, now
+actually called, threw on cue (`28/29 passed`, exit code 1) — then all cases passed again once
+restored. See `task-3-report.md`'s fix reports for the full pasted output of all three rounds.
 
 The same script also checks `parseTasklistCsv` (`src/tasklist.ts`) against real `tasklist.exe`
 output captured live during the second review round: a genuine "not found" `INFO:` line, the exact
@@ -313,9 +340,9 @@ throwing or guessing.
 
 What none of this can prove without the real game: that `getGameProcessInfo()`'s live `tasklist`
 call and the actual `SendInput` press interact correctly end to end, that the durable press record
-behaves as intended across a real MCP server restart or a real relaunch, and in particular the one
-residual this round's fix does not fully close (see "Getting past the title screen" above): Windows
-pid reuse for a genuinely different, unpressed game session, when the engine doesn't truncate
+and its in-process cache behave as intended across a real MCP server restart or a real relaunch, and
+in particular the one residual documented above (see "Getting past the title screen"): Windows pid
+reuse for a genuinely different, unpressed game session, when the engine doesn't truncate
 sunrise.log on a fresh start and no server ever observes the game not running in between.
 
 ## Testing against a live game
@@ -458,10 +485,12 @@ from this exact script (it did in the original probe, run by hand, not through t
   `game_enter`, extracted so it can be tested with a table of cases. See "Testing game_enter's branch
   selection without the game or the filesystem" above.
 - `src/press-record.ts` — the durable record of which pid `game_enter` already pressed Enter for
-  (`readPressRecord`/`writePressRecord`/`clearPressRecord`) and the pure staleness check that turns
-  it into `decideGameEnterAction`'s `pressedThisSession` input (`isPressRecordFresh`). Survives an
-  MCP server restart, unlike the in-process variable it replaced. See "Getting past the title screen"
-  above.
+  (`readPressRecord`/`writePressRecord`/`clearPressRecord`), the pure staleness check
+  (`isPressRecordFresh`), and `resolvePressedThisSession`, which checks `index.ts`'s in-process cache
+  first and only falls back to the file -- together they're what turns into
+  `decideGameEnterAction`'s `pressedThisSession` input. The file survives an MCP server restart; the
+  cache survives the file's own write silently failing within one process's lifetime. See "Getting
+  past the title screen" above.
 - `src/index.ts` — the MCP server: six tools over stdio, wiring `endpoint.ts`, `game.ts`, `keys.ts`,
   `tasklist.ts`, `game-enter-decision.ts`, and `press-record.ts` together.
 - `scripts/launch-game.ps1` — launch + window-wait, adapted from

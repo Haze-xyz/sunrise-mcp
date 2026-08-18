@@ -24,7 +24,7 @@ import {
 } from './keys.js';
 import { decideGameEnterAction } from './game-enter-decision.js';
 import { getGameProcessInfo } from './tasklist.js';
-import { clearPressRecord, isPressRecordFresh, readPressRecord, writePressRecord } from './press-record.js';
+import { clearPressRecord, resolvePressedThisSession, writePressRecord, type PressRecord } from './press-record.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -69,6 +69,15 @@ function errorResult(err: unknown): CallToolResult {
 /** True once the world-load line lands in sunrise.log; not measured precisely, so this leaves a lot
  *  of headroom rather than pretending to a number that hasn't actually been timed. */
 const WORLD_LOAD_TIMEOUT_MS = 120_000;
+
+/** In-process first-line cache of the last successful press, alongside the durable file
+ *  press-record.ts keeps. A plain assignment cannot fail the way a file write can, so this is what
+ *  keeps a same-process retry safe even if writePressRecord's disk write silently fails (it never
+ *  throws -- see its doc comment). Gated by the same pid+log-size freshness check as the file
+ *  (resolvePressedThisSession applies it to both), so it can never resurrect a record for a game
+ *  session it doesn't belong to just by existing; cleared alongside the file the moment the game is
+ *  observed not running. */
+let cachedPressRecord: PressRecord | null = null;
 
 const server = new McpServer({ name: 'sunrise-mcp', version: '0.1.0' });
 
@@ -182,11 +191,12 @@ server.registerTool(
       'right after game_launch resolves does nothing), presses Enter as an OS-level SendInput keystroke (the ' +
       'one place in this whole project that is legitimate, because the title screen precedes every key hook the ' +
       'DLL installs), then waits for the log line marking the world finishing loading. Safe to call repeatedly ' +
-      'against an already-running game, e.g. as a precondition before other tools: if a world has already loaded ' +
-      'this session, it reports ok without pressing anything; if this server already pressed Enter earlier this ' +
-      'session and the world is still loading, it resumes waiting without pressing again rather than risking a ' +
-      'second keystroke into whatever the game is currently showing; if it cannot tell whether the game has ' +
-      'already been pressed (an ambiguous or undeterminable state), it declines to press at all. Leaves the game ' +
+      'against an already-running game -- including after this MCP server itself restarts -- e.g. as a ' +
+      'precondition before other tools: if a world has already loaded, it reports ok without pressing anything; ' +
+      'if Enter was already pressed for this exact game process and the world is still loading, it resumes ' +
+      'waiting without pressing again rather than risking a second keystroke into whatever the game is currently ' +
+      'showing; if it cannot tell whether the game has already been pressed (an ambiguous or undeterminable ' +
+      'state), it declines to press at all. Leaves the game ' +
       'at the character-selection screen for now -- choosing a character is a separate tool not yet built. On ' +
       'failure, the response names which stage it stopped at (launch, titleScreen, keyPress, worldLoad, or ' +
       'ambiguous) so a caller knows what actually went wrong rather than just that something did.',
@@ -206,7 +216,11 @@ server.registerTool(
     try {
       const logPath = getLogPath();
       const proc = await getGameProcessInfo();
-      if (!proc.running) await clearPressRecord(); // invalidate: whatever we recorded no longer applies.
+      // Invalidate both records: whatever either one recorded no longer applies.
+      if (!proc.running) {
+        cachedPressRecord = null;
+        await clearPressRecord();
+      }
 
       // See game-enter-decision.ts for the branch-selection logic itself and why each of these
       // observations is exactly what's needed (no more, no less) to decide what to do next.
@@ -214,14 +228,14 @@ server.registerTool(
       const titleMarkerPresent =
         proc.running && !worldMarkerPresent ? await waitForLogMarker(TITLE_SCREEN_MARKER, 0, logPath) : false;
 
-      // Durable, not in-process: see press-record.ts for why an in-process-only record (the previous
-      // round's approach) doesn't survive an MCP server restart, and the finding was never scoped to
-      // one server process's uptime.
+      // Checks the in-process cache before ever touching the durable file (see press-record.ts's
+      // resolvePressedThisSession and cachedPressRecord's doc comment above for why both exist: the
+      // cache survives a failed disk write within this process, the file survives this process
+      // restarting).
       let pressedThisSession = false;
       if (proc.running && proc.pid !== null) {
-        const record = await readPressRecord();
         const logSizeNow = await currentLogSize(logPath);
-        pressedThisSession = isPressRecordFresh(record, proc.pid, logSizeNow);
+        pressedThisSession = await resolvePressedThisSession(cachedPressRecord, proc.pid, logSizeNow);
       }
 
       const decision = decideGameEnterAction({
@@ -251,8 +265,8 @@ server.registerTool(
           });
 
         case 'resumeWorldWait': {
-          // A durable record shows this server already pressed Enter for this exact pid earlier --
-          // pressing again would risk a second, spurious keystroke into whatever the game is
+          // The cache or the durable record (or both) shows Enter was already pressed for this exact
+          // pid -- pressing again would risk a second, spurious keystroke into whatever the game is
           // currently showing. Resume waiting for the world to finish loading instead; no fresh
           // offset needed here since WORLD_LOADED_MARKER was just proven absent above, so anything
           // that satisfies this wait from here on is unambiguously new.
@@ -261,13 +275,13 @@ server.registerTool(
           if (!enteredWorld) {
             return fail(
               stage,
-              `Timed out waiting for "${WORLD_LOADED_MARKER}" in sunrise.log (Enter was already pressed earlier ` +
-                'this session, so it was not pressed again).',
+              `Timed out waiting for "${WORLD_LOADED_MARKER}" in sunrise.log (Enter was already pressed for this ` +
+                'game process, so it was not pressed again).',
             );
           }
           return textResult({
             status: 'ok',
-            message: 'The game reached the character-selection screen (Enter had already been pressed earlier this session).',
+            message: 'The game reached the character-selection screen (Enter had already been pressed for this game process).',
           });
         }
 
@@ -305,15 +319,20 @@ server.registerTool(
       const preKeyPressOffset = await currentLogSize(logPath);
       const press = await pressTitleScreenKey();
       if (press.status !== 'sent') return fail(stage, press.message);
-      // Persist that we pressed for this pid, keyed to the log's size right now (before this press's
-      // own effects land), so a retry -- from this server or, after a restart, a fresh one -- can
-      // recognize the same still-running session and resume waiting instead of pressing again. If
-      // the pid still couldn't be determined even after the launch-path fallback above, this degrades
-      // to a real (if narrow) residual risk rather than a fabricated safe one: a later retry, if
-      // tasklist manages to determine the pid by then, would find no matching record and re-press.
-      // There is no way to close that without a positive record to check against, which is exactly
-      // what's missing in this corner.
-      if (currentPid !== null) await writePressRecord({ pid: currentPid, logSizeAtPress: preKeyPressOffset });
+      // Record that we pressed for this pid, keyed to the log's size right now (before this press's
+      // own effects land): the in-process cache first, unconditionally -- a plain assignment cannot
+      // fail, so a same-process retry is safe even if the file write right after it does -- then the
+      // durable file, best-effort, so a retry after this server restarts can recognize the same
+      // still-running session too. If the pid still couldn't be determined even after the launch-path
+      // fallback above, this degrades to a real (if narrow) residual risk rather than a fabricated
+      // safe one: a later retry, if tasklist manages to determine the pid by then, would find no
+      // matching record (in the cache or the file) and re-press. There is no way to close that
+      // without a positive record to check against, which is exactly what's missing in this corner.
+      if (currentPid !== null) {
+        const record: PressRecord = { pid: currentPid, logSizeAtPress: preKeyPressOffset };
+        cachedPressRecord = record;
+        await writePressRecord(record);
+      }
 
       stage = 'worldLoad';
       const enteredWorld = await waitForLogMarker(WORLD_LOADED_MARKER, WORLD_LOAD_TIMEOUT_MS, logPath, preKeyPressOffset);

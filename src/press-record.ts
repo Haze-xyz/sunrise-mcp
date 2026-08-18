@@ -123,3 +123,34 @@ export function isPressRecordFresh(record: PressRecord | null, currentPid: numbe
   if (record.pid !== currentPid) return false;
   return currentLogSize >= record.logSizeAtPress;
 }
+
+/**
+ * Resolves whether `currentPid` was already pressed for, checking `cachedRecord` -- an in-process,
+ * first-line cache the caller (index.ts) maintains alongside the durable file -- before ever
+ * touching the file at all.
+ *
+ * This exists because `writePressRecord` never throws: an unwritable `%LOCALAPPDATA%`, a `mkdir`
+ * failure, or a transient I/O error is swallowed and only logged. Without an in-process fallback, a
+ * silently failed write would mean the *next* call in the very same server process -- no restart
+ * needed -- finds no record either, and re-presses. `index.ts` sets `cachedRecord` unconditionally
+ * right after a successful press, before it even attempts the file write, so a broken disk write
+ * cannot cost this function its answer: if the cache alone already proves freshness, the file is
+ * never consulted (that's the short-circuit below), which is also what this function's own tests
+ * exercise directly -- a `readRecord` that would throw if called never gets the chance to.
+ *
+ * The cache is gated by the exact same `isPressRecordFresh` pid+log-size check as the file, not
+ * trusted merely for existing: this is what stops the two sources from disagreeing in a way that
+ * resurrects a record for a session it doesn't actually belong to (e.g. a cache left over from a
+ * game session this process observed end, if some future change forgot to invalidate it -- today
+ * `index.ts` clears both the cache and the file the moment the game is observed not running).
+ */
+export async function resolvePressedThisSession(
+  cachedRecord: PressRecord | null,
+  currentPid: number,
+  currentLogSize: number,
+  readRecord: () => Promise<PressRecord | null> = readPressRecord,
+): Promise<boolean> {
+  if (isPressRecordFresh(cachedRecord, currentPid, currentLogSize)) return true;
+  const fileRecord = await readRecord();
+  return isPressRecordFresh(fileRecord, currentPid, currentLogSize);
+}
