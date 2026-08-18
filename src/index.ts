@@ -22,7 +22,24 @@ endpoint.on('protocolError', (err: Error) => {
 endpoint.on('unmatchedResponse', (err: Error) => {
   console.error(`[sunrise-mcp] endpoint sent an unmatched (id: 0) response: ${err.message}`);
 });
+
+// game_kill tearing down the game is an expected cause of a connection error (typically
+// ECONNRESET) — that is not worth surfacing as an error the model might reason about. Genuinely
+// unexpected connection errors (the game crashing on its own, a network hiccup) still get logged
+// normally; the distinction is the whole point, so this only ever suppresses the one error caused
+// by a game_kill call this process itself just made, and only briefly.
+let expectingDisconnectUntil = 0;
+const EXPECT_DISCONNECT_WINDOW_MS = 5000;
+
+function expectDisconnectBriefly(): void {
+  expectingDisconnectUntil = Date.now() + EXPECT_DISCONNECT_WINDOW_MS;
+}
+
 endpoint.on('connectionError', (err: Error) => {
+  if (Date.now() < expectingDisconnectUntil) {
+    expectingDisconnectUntil = 0; // Consume it: only the next error is excused, not every one for the next 5s.
+    return;
+  }
   console.error(`[sunrise-mcp] endpoint connection error: ${err.message}`);
 });
 
@@ -104,6 +121,7 @@ server.registerTool(
       'currently running.',
   },
   async (): Promise<CallToolResult> => {
+    expectDisconnectBriefly();
     const result = await killGame();
     return result.status === 'failed' ? errorResult(new Error(result.message)) : textResult(result);
   },

@@ -16,9 +16,10 @@
  * client-side timeout, a dropped connection followed by an automatic reconnect, an over-long line
  * rejected before it ever reaches the socket, a connect that only succeeds after the endpoint's
  * listener comes up late, a busy-accept (accepted then immediately destroyed) retried until a real
- * accept goes through, close() during a connect that's still inside its reconnect delay, and a
- * blanket check that every request every fake server saw obeyed the wire-protocol constraints
- * (non-zero numeric id, <=512 bytes, no \u escapes).
+ * accept goes through, close() during a connect that's still inside its reconnect delay both
+ * leaving zero live sockets behind AND resolving in milliseconds rather than riding out the
+ * delay, and a blanket check that every request every fake server saw obeyed the wire-protocol
+ * constraints (non-zero numeric id, <=512 bytes, no \u escapes).
  *
  * Every fake server binds an ephemeral port (never 127.0.0.1:30975, the real endpoint's port), so
  * this can never be confused with a live game instance.
@@ -394,7 +395,13 @@ async function main() {
     // care how it resolves (it will be rejected by the close below) — just that it doesn't crash.
     const pending = closingClient.runLine('after.close').catch(() => undefined);
     await delay(50); // make sure we're inside the delay window, not before it started.
+    const closeStart = performance.now();
     await closingClient.close();
+    const closeElapsedMs = performance.now() - closeStart;
+
+    // close() must interrupt the reconnect delay, not just wait it out: it should return in a few
+    // milliseconds, not ride out the remaining ~250ms of the 300ms minReconnectDelayMs.
+    assert.ok(closeElapsedMs < 100, `close() took ${closeElapsedMs.toFixed(1)}ms; expected well under 100ms`);
 
     await delay(500); // well past minReconnectDelayMs — enough time for a leaked connect to land.
     assert.equal(serverSockets.size, 0, 'a socket connected to the server after close() was called');

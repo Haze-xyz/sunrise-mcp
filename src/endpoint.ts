@@ -6,7 +6,8 @@
  * reply carrying the same `id` comes back. That is the whole contract, which is what makes it
  * testable with a ten-line fake server instead of the real game (see scripts/endpoint-smoke.mjs).
  *
- * Wire protocol (proven against the live game, see task-7-brief.md):
+ * Wire protocol (proven against the live game — see README.md's "Wire protocol" section for the
+ * full capture this was validated against):
  *   -> {"id":1,"line":"movement.fly_speed 55"}
  *   <- {"id":1,"status":"ok","summary":"","rows":[{"key":"movement.fly_speed","value":55}]}
  *
@@ -18,7 +19,8 @@
  * frame delimiter, even though a `describe` reply can be up to ~128 KB and arrive split across
  * many TCP segments.
  *
- * Endpoint constraints this client has to respect (see task-7-brief.md for how each was learned):
+ * Endpoint constraints this client has to respect, each one learned from the endpoint's own code,
+ * its reviews, or a live capture (see README.md's "Wire protocol" section for the details):
  *   - Only one connection is accepted at a time; a second is accepted then immediately closed.
  *   - `id` must be a non-zero JSON number. Zero means "absent".
  *   - The endpoint never times out a request on its own, so this client enforces its own
@@ -47,6 +49,7 @@
 
 import { createConnection, type Socket } from 'node:net';
 import { EventEmitter } from 'node:events';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 export type EndpointStatus =
   | 'ok'
@@ -178,10 +181,6 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * Maintains a single persistent connection to the Sunrise console endpoint, reconnecting on
  * demand when the connection has dropped. Emits `protocolError` and `unmatchedResponse` for
@@ -211,6 +210,9 @@ export class SunriseEndpointClient extends EventEmitter {
   /** True once the *current* connection has completed at least one full request/response round trip. */
   private connectionHasSucceeded = false;
   private closed = false;
+  /** Aborted by close() so a reconnect delay or an in-flight handshake stops immediately, rather
+   *  than close() merely waiting for it to finish naturally on its own schedule. */
+  private readonly closeController = new AbortController();
 
   constructor(options: SunriseEndpointOptions = {}) {
     super();
@@ -251,12 +253,15 @@ export class SunriseEndpointClient extends EventEmitter {
    */
   async close(): Promise<void> {
     this.closed = true;
+    this.closeController.abort();
     this.failAllPending(new EndpointClosedError());
 
     // A connect may be in flight (mid-backoff-delay, mid-handshake, or holding a fresh socket
-    // that hasn't been assigned to `this.socket` yet). Let it settle — connectNow() and its
-    // onConnect handler both check `this.closed` and self-destroy rather than adopting a socket
-    // once it's set — before checking what, if anything, is actually still live.
+    // that hasn't been assigned to `this.socket` yet). The abort() above interrupts a reconnect
+    // delay or an in-progress handshake immediately rather than letting either ride out its own
+    // schedule; let it settle — connectNow() and its onConnect handler both check `this.closed`
+    // and self-destroy rather than adopting a socket once it's set — before checking what, if
+    // anything, is actually still live.
     const pendingConnect = this.connectPromise;
     if (pendingConnect) {
       await pendingConnect.catch(() => undefined);
@@ -359,14 +364,19 @@ export class SunriseEndpointClient extends EventEmitter {
     const backoff = this.reconnectFailures > 0 ? this.backoffDelay() : 0;
     const waitMs = Math.max(gapNeeded, backoff, 0);
     if (waitMs > 0) {
-      await delay(waitMs);
+      try {
+        await sleep(waitMs, undefined, { signal: this.closeController.signal });
+      } catch {
+        // Aborted by close(): stop waiting immediately instead of riding out the rest of the
+        // gap/backoff delay. The `this.closed` check right below is what actually settles this.
+      }
     }
     if (this.closed) {
       throw new EndpointClosedError();
     }
 
     return new Promise<Socket>((resolve, reject) => {
-      const socket = createConnection({ host: this.host, port: this.port });
+      const socket = createConnection({ host: this.host, port: this.port, signal: this.closeController.signal });
 
       const onConnect = () => {
         socket.off('error', onInitialError);
@@ -381,6 +391,10 @@ export class SunriseEndpointClient extends EventEmitter {
       };
       const onInitialError = (err: Error) => {
         socket.off('connect', onConnect);
+        if (this.closed) {
+          reject(new EndpointClosedError());
+          return;
+        }
         this.reconnectFailures += 1;
         reject(new EndpointConnectionError(`Could not connect to ${this.host}:${this.port}: ${err.message}`, err));
       };

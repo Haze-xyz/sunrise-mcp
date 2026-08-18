@@ -110,6 +110,24 @@ FIFO-dispatch mutant applied to the compiled client, the reordered-reply version
 fails (and only this test — everything else still passes), then passes again once the mutant is
 reverted. Worth remembering next time a "concurrent" test is added anywhere in this repo.
 
+## Testing against a live game
+
+`scripts/smoke.mjs` is the live counterpart to `scripts/endpoint-smoke.mjs`: the same shape of
+checks, but through `endpoint.ts` against the actual running game instead of a fake server. Unlike
+everything else in this repo, it needs both a running game and Windows node — read its header
+before running it, or see the WSL warning at the top of this README.
+
+```
+npm run smoke   # builds, then runs scripts/smoke.mjs — needs the game running, Windows node.exe
+```
+
+It covers describe (registry size, `movement.fly_speed`'s numeric bounds), read, write, read-back,
+`outOfRange` (and confirms the refused write left the value unchanged), `unknownName`,
+`badArgument`, the client-side over-long-line guard (checking the specific error type and that it
+resolved in under 50ms, not after a round trip), and two concurrent requests resolving to their own
+rows. It restores `movement.fly_speed` to whatever it read at the start before exiting, so running
+it doesn't leave the game's settings different from how it found them.
+
 ## Wire protocol (for reference)
 
 One JSON object per line, `\n`-terminated, both directions:
@@ -159,9 +177,20 @@ retried. The distinction is a single per-connection flag (`connectionHasSucceede
 fresh socket and set the moment any response is matched to a pending request.
 
 `close()` is terminal: it stops any connect still waiting out its reconnect delay or mid-handshake
-(rather than letting it land later and silently take the endpoint's one connection slot), and the
-client never reconnects again afterward. Construct a new `SunriseEndpointClient` if you need the
-endpoint again.
+— via an `AbortController`, so it interrupts an in-progress wait rather than merely checking a flag
+once the wait finishes on its own — rather than letting it land later and silently take the
+endpoint's one connection slot. It resolves in milliseconds, not after however much of the
+gap/backoff delay happened to be left. The client never reconnects again afterward; construct a new
+`SunriseEndpointClient` if you need the endpoint again.
+
+**Honesty check on when this actually matters:** the retry path above has not been exercised by the
+real `game_launch` → `console_run` flow. `game_launch`'s window-wait (see `scripts/launch-game.ps1`)
+already outlasts the time the endpoint's listener takes to bind, so by the time an agent's first
+`console_run` arrives, the endpoint is already up — the retry loop's connect-refused branch has
+never actually fired in practice. Keep it anyway: it's insurance against a faster launch path
+later (or a different game/endpoint startup order), not something load-bearing today. The
+busy-accept branch is likewise unexercised live — nothing in the current flow ever opens a second
+connection while one is active.
 
 ## Design notes and known limits
 
@@ -169,18 +198,30 @@ endpoint again.
   A stale, very-late response landing on a long-since-reused id is theoretically possible but needs
   billions of prior requests plus adversarial timing; not worth a monotonic-forever counter for an
   agent-driven console client.
-- **`launchGame()`'s output parsing** trusts that `scripts/launch-game.ps1`'s one JSON result line
-  is somewhere in `powershell.exe`'s stdout and scans backwards for the first line that parses as
-  the expected shape (see `parseLaunchOutput` in `src/game.ts`). This has not been exercised against
-  a real `powershell.exe` process — only the parsing logic itself, offline.
-- **Defaults are judgment calls, not measured values**: `requestTimeoutMs` (10s), the reconnect
-  backoff schedule, and `log_read`'s 2 MiB tail-read cap were chosen for plausibility, not tuned
-  against real endpoint or filesystem latency. Revisit once the server has actually run against the
-  game.
-- **This has not yet been exercised against a running game.** Everything above is verified by
-  typecheck/build output and the fake-server suite only — see "Testing endpoint.ts without the
-  game". The console endpoint's real timing (how soon after `game_launch` it accepts connections,
-  real `describe` payload size, real log line rate) is unmeasured.
+- **Defaults are judgment calls, not tightly tuned values**: `requestTimeoutMs` (10s), the
+  reconnect backoff schedule, and `log_read`'s 2 MiB tail-read cap were chosen for plausibility, not
+  measured against the real endpoint — though the one real data point available (a full 16-check
+  round trip against the live game completing in 0.22s) suggests the 10s timeout has enormous
+  headroom for normal use, and is really only there to bound a genuinely stuck request.
+- **`game_kill` quiets the connection error it causes.** Killing the game while a connection is open
+  produces an expected `ECONNRESET`; `index.ts` tells the `connectionError` handler to swallow the
+  *next* one after a `game_kill` call (within a short window), so a deliberate shutdown doesn't
+  print something that reads as an unexpected error. Every other connection error still logs
+  normally — see the comment above `expectDisconnectBriefly` in `src/index.ts`.
+
+### Verified against the live game
+
+Both endpoint.ts (directly, via `scripts/smoke.mjs`) and the full five-tool stdio round trip (via
+an MCP client) have now been run against the real, running game — see `NOTES.md` for the session
+that did it. In summary: a 16-check live round trip (registry with 18 entries and numeric bounds,
+read, write, read-back, `outOfRange` with the value provably unchanged, `unknownName`,
+`badArgument`, the client-side over-long guard refusing before anything reached the socket, two
+concurrent requests resolving to their own rows) passed in 0.22s; and the full agent-shaped
+sequence — `game_launch` (window up, pid reported) → `console_describe` → `console_run` write →
+`console_run` read-back → `log_read` (real log content) → `game_kill` — passed end to end in
+20.9s, including `launchGame()`'s PowerShell JSON parsing working on the first try. Not yet
+exercised: the retry-on-connect-failure path (see "Retry policy" above), and anything layer 2's
+key-input primitive would unlock past the title screen.
 
 ## Project layout
 
@@ -194,3 +235,4 @@ endpoint again.
   `Start-Process -PassThru` / poll-`MainWindowHandle` shape; the capture/dump/close steps that
   script also does are dropped, since `game_launch` wants the game left running).
 - `scripts/endpoint-smoke.mjs` — the fake-server test for `endpoint.ts` described above.
+- `scripts/smoke.mjs` — the live-game counterpart, described in "Testing against a live game".

@@ -79,10 +79,20 @@ so it stays legible after the originating plan document is gone.
 
 ## Verifying the fixes are real, not just present
 
-**Findings 1 and 2** were each proven with a test that fails without the fix, not just an argument:
-`scripts/endpoint-smoke.mjs`'s "a request survives connect-refused..." / "a busy-accept..." tests for
-finding 1, and "close() during a connect still inside its reconnect delay..." for finding 2. All
-three are in the 12/12 pass below.
+**Finding 1** was proven with tests that fail without the fix, not just an argument:
+`scripts/endpoint-smoke.mjs`'s "a request survives connect-refused..." and "a busy-accept..." tests
+both fail (hang until their own watchdog trips) against the pre-fix, single-attempt `connectNow`.
+
+**Finding 2's test is weaker than that, and it is worth being precise about what it actually
+proves.** "close() during a connect still inside its reconnect delay..." asserts the server ends
+with zero live sockets — and the fix landed as three separate guards (`ensureConnected`'s
+closed-check, `connectNow`'s closed-check after the delay, and `onConnect`'s closed-check). A
+second-round re-review measured that removing any *one* of those three guards alone still leaves
+the test passing, because the other two independently prevent the same leak; only removing all
+three at once makes it fail. So this test proves the end-to-end property (no leaked socket) holds
+with the fix as a whole — it does not, and was never able to, attribute that property to any single
+guard. The three-guard redundancy is a deliberate defense-in-depth choice, not a gap; just don't
+read the passing test as evidence that each guard is individually load-bearing.
 
 **Finding 3's fix was checked against the specific failure mode it was fixing**, not just re-run:
 
@@ -148,8 +158,105 @@ word "any" inside prose comments/descriptions — no type escapes, no suppressio
 
 No MSBuild, no game, nothing under `/mnt/e/` touched — all of the above ran under WSL node.
 
-## Still outstanding
+## Steps 2 and 4: now done (superseded by the section below)
 
-Steps 2 and 4 of the original plan (smoke-testing and a full round trip against the live game) are
-still not done, for the same reason as before: they need the game running, and that wasn't this
-session's job. Nothing in this round changed that.
+The rest of this file predates Steps 2 and 4 actually running. They have since been run against
+the live game by the person at the keyboard — see "Second review round" below for what came back
+and what changed as a result. `README.md`'s "Verified against the live game" section has the
+durable summary of the results themselves.
+
+## Second review round
+
+Steps 2 and 4 both passed against the live, running game: a 16-check live round trip through
+`endpoint.ts` directly (`scripts/smoke.mjs`, written at the keyboard and handed over to be owned
+here) in 0.22s, and the full five-tool stdio round trip — `game_launch` → `console_describe` →
+`console_run` write → `console_run` read-back → `log_read` → `game_kill` — in 20.9s, with
+`movement.json` on disk confirming the write actually persisted. Layer 1's end criterion is met.
+That run surfaced two things and four small cleanup items.
+
+**What the live run surfaced:**
+
+- The retry logic added in the first review round (Finding 1) was never actually exercised:
+  `game_launch`'s window-wait already outlasts the endpoint's bind time, so every `console_run` in
+  practice finds it already listening. The fix is still worth keeping — insurance for a faster
+  launch path later — but claiming it as load-bearing today would be dishonest. `README.md`'s
+  "Retry policy" section now says so plainly.
+- `game_kill` logged `endpoint connection error: read ECONNRESET` on shutdown — the client
+  correctly noticing the game died, but a deliberate kill causing that is expected, not an error
+  worth surfacing to whatever is reading stderr.
+
+**What changed:**
+
+- **Owned and strengthened `scripts/smoke.mjs`.** Two of its checks were weaker than they looked:
+  the client-side over-long-line guard only checked that *some* error was thrown, which would also
+  pass if the guard were deleted and the line were sent to the game and refused for an unrelated
+  reason — now checks the specific error type (`EndpointRequestTooLargeError`) and that it resolved
+  in under 50ms, since a real round trip to the game would not be that fast. The script also used
+  to leave `movement.fly_speed` at whatever test value it last set — now restores it to the value it
+  read at the start, in a `finally` block, so running the smoke test doesn't quietly change the
+  game's settings. Added `npm run smoke`, and rewrote the header so "needs a running game" and
+  "needs Windows node" are impossible to miss (the WSL failure mode here is a silent hang, not an
+  error — worth stating plainly rather than assuming the WSL section elsewhere in the README gets
+  read first). Committed as the Step 2 deliverable the plan asks for.
+- **Quieted the intentional kill.** `src/index.ts` now has `expectDisconnectBriefly()`, called at
+  the top of the `game_kill` handler: it records a short (5s) window during which exactly one
+  `connectionError` is swallowed instead of logged. Chose this over closing the endpoint client
+  before killing, because `close()` is terminal — closing the shared client on every `game_kill`
+  would break reconnection after the *next* `game_launch`, defeating the whole point of the
+  reconnect design (an agent session surviving a game restart). A flag the error handler consults
+  keeps the client reusable across kill/relaunch cycles while still not swallowing errors that
+  aren't caused by an intentional kill.
+- **Replaced the two `task-7-brief.md` references in `src/endpoint.ts`** (lines 9 and 21) with
+  either the substance or a `README.md` pointer — the same defect as the commit subject fixed in the
+  first round, missed in that sweep. `task-7-brief.md` lives in `sunrise-console`'s plan directory
+  and won't survive the plan being finished.
+- **Made `close()` actually fast, instead of documenting around the fact that it wasn't.** The
+  second-round re-review measured `close()` taking ~3.5s of a 4s backoff step, because
+  `connectNow`'s `await delay(waitMs)` had no cancellation path — the "stops"/"cancels" language in
+  `README.md` and the first-round `NOTES.md` was aspirational, not yet true. Fixed the code instead
+  of softening the docs: `close()` now aborts an `AbortController` that both the reconnect-delay
+  sleep (`node:timers/promises`' `setTimeout` with `{ signal }`) and the TCP connect attempt
+  (`createConnection`'s own `signal` option) are wired to, so both are interrupted immediately
+  rather than left to finish on their own schedule. `scripts/endpoint-smoke.mjs`'s close-during-delay
+  test now also asserts `close()` resolves in under 100ms (previously it only asserted the eventual
+  socket count), which is the regression check for this specific fix.
+- **Corrected `NOTES.md`'s claim about what the close-during-delay test proves** — see the "second
+  review round" correction above the "Steps 2 and 4" heading in this file. It proves the guards
+  work together, not that each is individually pinned.
+
+**Verification (all local, no game, no MSBuild — the author stepped away and the game is closed):**
+
+```
+$ npm run typecheck
+> tsc -p tsconfig.json --noEmit
+(zero output)
+
+$ npm run build
+> tsc -p tsconfig.json
+(zero output)
+
+$ npm run test:endpoint
+> npm run build && node scripts/endpoint-smoke.mjs
+main fake endpoint listening on 127.0.0.1:36745
+PASS  normal request/response
+PASS  two requests in flight resolve to the right ids, even when replies arrive out of order
+PASS  reply split across two TCP writes
+PASS  reply larger than one TCP segment
+PASS  id: 0 reply is surfaced, not matched to any request, and the real request times out
+PASS  client-side timeout when the endpoint never answers
+PASS  an over-long line is rejected client-side and never reaches the socket
+PASS  dropped connection rejects the in-flight request once already proven, then the next call reconnects
+PASS  a request survives connect-refused while the endpoint is not up yet, then succeeds once it is
+PASS  a busy-accept (accepted then immediately destroyed) is retried until a real accept goes through
+PASS  close() during a connect still inside its reconnect delay leaves the server with zero live sockets
+PASS  every one of the 12 requests observed satisfied the wire-protocol constraints
+12/12 passed
+```
+
+Ran three more times back to back to check the new timing assertion (close() < 100ms) wasn't
+flaky under WSL's scheduling — 12/12 every time.
+
+`scripts/smoke.mjs` was **not** run this round, per instruction: the game is closed and the author
+stepped away. Its content was reviewed, strengthened, and typechecked-by-reading only; its own
+prerequisites (running game, Windows node) mean it can only actually be exercised the way
+`scripts/endpoint-smoke.mjs` was exercised here.
