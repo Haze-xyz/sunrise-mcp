@@ -49,7 +49,7 @@ Everything is env vars, with Windows-appropriate defaults — nothing here is WS
 | `log_read` | `lines?: number` | The tail of `sunrise.log` (default 200 lines, capped at 1000). |
 | `game_enter` | — | Launches if needed, gets past the title screen, and waits for the world to load. Leaves the game at character selection. |
 
-Two things worth knowing before you drive this from an agent:
+Three things worth knowing before you drive this from an agent:
 
 - **The endpoint answers from the title screen**, before the player presses anything. You do not
   need to wait for a load after `game_launch` resolves — `console_run` and `console_describe` work
@@ -78,7 +78,8 @@ together — a single value could only ever answer the last one. This is not an 
 The DLL hooks the `GetKeyState` the engine polls every frame and answers it, so only game code sees
 the held key; the real keyboard is untouched and Dear ImGui still reads it for its own modifiers.
 
-**They report `refused` — changing nothing — in two states**, and the summary names which:
+**Two states leave the field disconnected from the game**, and every response carries a `field_live`
+row saying whether you are in one:
 
 - **The polled guards are not attached.** They install with the graphics hooks, while the console
   entries register at DLL load, so there is a window in which the entries exist and nothing reads
@@ -87,9 +88,23 @@ the held key; the real keyboard is untouched and Dear ImGui still reads it for i
   answers "released" for every key the game asks about, and it does that before it ever looks at the
   forced-key field.
 
-Refusing the *releases* as well as the holds is deliberate: it freezes the field in both states — no
-writes in, no writes out — so it can never be changed by a caller who cannot observe the change.
-Retry once the state the summary names has cleared.
+**`input.hold` refuses in both, changing nothing; the two releases always act and report `ok`.** The
+asymmetry is deliberate. A hold the game cannot see is a keystroke waiting to fire at a moment nobody
+chose, because neither state clears the field on the way in or out — the bit simply becomes live
+later. A release has the opposite property: opening a Sunrise surface *masks* the field without
+clearing it, so a key held before the surface opened springs back the instant it closes, and
+`input.release_all` is the only thing in the process that can stop that. Refusing it in exactly the
+state you would reach for it would leave no way out. A clear is idempotent and nothing it can corrupt
+depends on who is currently reading the field, so the summary and `field_live` report the state
+rather than the status declining to act.
+
+**Consequence worth knowing before you type at the in-game console: a hold submitted at the console
+prompt is *always* refused.** Not usually — always, by construction. The overlay drains the command
+queue before it tests its own visibility, so a line typed at the prompt runs on the next frame while
+the console is still showing, and "a Sunrise surface has the keyboard" cannot be false for anything
+typed there. Holds come from this MCP, with no surface open. The prompt is still where the releases
+and the reported state are useful, and `input.release_all` typed there works — that is the escape
+hatch the asymmetry exists to preserve.
 
 ### Memory — `mem.module`, `mem.read`, `mem.scan`, `mem.scan_data`, `mem.resolve`, `mem.write`
 

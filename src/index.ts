@@ -114,10 +114,13 @@ server.registerTool(
       'bootflow.character_step. Call console_describe for the authoritative list with help and bounds; what ' +
       'follows is only what an agent needs before deciding what to try. input.hold <vk> / input.release <vk> / ' +
       'input.release_all report Windows virtual keys held to the game through the DLL\'s GetKeyState hook, several ' +
-      'at once, and stay held until released -- that is how you drive movement and abilities. They report refused ' +
-      '(changing nothing) while the key hook is not yet attached or the Sunrise in-game interface is open, since ' +
-      'the game is told every key is released in both states; the summary says which. They do NOT get past the ' +
-      'title screen, which precedes the hook -- use game_enter for that. mem.module / mem.read / mem.scan / ' +
+      'at once, and stay held until released -- that is how you drive movement and abilities. input.hold reports ' +
+      'refused, changing nothing, while the key hook is not yet attached or a Sunrise in-game surface has the ' +
+      'keyboard, since the game is told every key is released in both states and the hold would only fire later; ' +
+      'the summary and a field_live row say which. The two releases always act and report ok in every state, so ' +
+      'input.release_all is the way out of a key left held. None of them gets past the title screen: measured ' +
+      '2026-08-18, the hook IS attached there and input.hold answers ok, but the title screen does not read it -- ' +
+      'use game_enter for that. mem.module / mem.read / mem.scan / ' +
       'mem.scan_data / mem.resolve / mem.write read and search the live game process: signature scans over the ' +
       'main image (mem.scan for code, mem.scan_data for static data -- neither sweeps the heap), hexdump reads of ' +
       'any committed readable address including the heap, RIP-relative displacement decoding, and bounded writes. ' +
