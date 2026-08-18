@@ -192,8 +192,9 @@ server.registerTool(
       'got there, presses Enter as an OS-level SendInput keystroke (the one place in this whole project that is ' +
       'legitimate, because the title screen precedes every key hook the DLL installs, and this engine reads the ' +
       'keyboard below the window message queue so nothing posted at its window reaches it), then waits for the ' +
-      'log line marking the world finishing loading. The response names the route the press actually took ' +
-      '(sendInput, or the postMessage fallback used when the foreground could not be taken). Safe to call repeatedly ' +
+      'log line marking the world finishing loading. The response names the route the press actually took: ' +
+      'sendInput on success, or postMessage -- which is reported as a failure at stage keyPress, since that fallback ' +
+      'reaches the window but cannot move an engine that polls GetKeyState. Safe to call repeatedly ' +
       'against an already-running game -- including after this MCP server itself restarts -- e.g. as a ' +
       'precondition before other tools: if a world has already loaded, it reports ok without pressing anything; ' +
       'if Enter was already pressed for this exact game process and the world is still loading, it resumes ' +
@@ -210,8 +211,13 @@ server.registerTool(
     // in it) -- goes through this one path, tagged with whichever stage was running at the time.
     // isError: true matches every other tool in this file that reports failure (game_launch,
     // game_kill, log_read), rather than leaving a caller to notice a 'failed' status buried in text.
-    const fail = (stage: string, message: string): CallToolResult => ({
-      content: [{ type: 'text', text: JSON.stringify({ stage, status: 'failed', message }, null, 2) }],
+    const fail = (stage: string, message: string, route?: string): CallToolResult => ({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ stage, status: 'failed', ...(route !== undefined ? { route } : {}), message }, null, 2),
+        },
+      ],
       isError: true,
     });
 
@@ -321,7 +327,10 @@ server.registerTool(
       // below was produced by THIS press, not a stale one already sitting in the log.
       const preKeyPressOffset = await currentLogSize(logPath);
       const press = await pressTitleScreenKey();
-      if (press.status !== 'sent') return fail(stage, press.message);
+      // Unchanged gate: 'sent' still means a keystroke was actually delivered, which is exactly what
+      // the press record below is allowed to be written for. The PostMessage fallback reports
+      // 'failed' precisely so it cannot reach that record -- see interpretPressKeyOutput in keys.ts.
+      if (press.status !== 'sent') return fail(stage, press.message, press.route);
       // Which route delivered the press is what a reader needs first when this next breaks, so it
       // travels with every outcome from here on -- the ok below and the worldLoad timeout alike.
       const pressRoute = press.route ?? 'unknown';
@@ -354,6 +363,7 @@ server.registerTool(
             `${pressRoute} route. ${press.message} If the game is still sitting on the title screen, the ` +
             'keystroke was accepted by the OS but not by the game; call game_kill and then game_enter again, ' +
             'since a bare game_enter retry will resume waiting instead of pressing again.',
+          pressRoute,
         );
       }
 

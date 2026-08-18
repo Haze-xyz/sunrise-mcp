@@ -36,12 +36,28 @@
     WM_KEYDOWN/WM_KEYUP/WM_CHAR, to the visible 'Tiger D3D Window', to the hidden 'Tiger Input
     Window' the process also owns, and to both windows' thread queues via PostThreadMessage, all
     returned success and none dismissed the title screen -- with or without a faked
-    WM_ACTIVATE/WM_SETFOCUS first. That is the signature of Raw Input or DirectInput, which the OS
-    serves only to the foreground application.
+    WM_ACTIVATE/WM_SETFOCUS first.
+
+    The cause is now known by name, from static analysis of the mapped dump rather than inferred
+    from the behaviour: the engine polls **GetKeyState** (`Input_PollKeyboardState105`, RVA
+    0x003447A0). GetKeyState reads the per-thread SYNCHRONOUS key-state table, which is updated
+    only when that thread pulls real hardware input off its queue. A posted message never touches
+    it -- which is why no PostMessage, SendMessage or PostThreadMessage can move this screen, at
+    any window, on any thread -- and injected input only ever reaches the FOREGROUND thread's
+    queue. Both negatives below follow mechanically from that one fact. (An earlier revision of
+    this comment guessed "Raw Input or DirectInput". Every behavioural conclusion survived; the
+    attributed API did not. The right name matters: the follow-on route is Sunrise's own hook
+    intercepting that polled GetKeyState in-process, which is discoverable from `GetKeyState` and
+    invisible from `RegisterRawInputDevices`.)
 
   * With the struct fixed, SendInput dismisses the title screen instantly when the game holds the
     foreground, and does nothing at all when it does not. Both directions were measured on the same
-    launch. So the foreground is genuinely required here; it is not a preference.
+    launch. So the foreground is genuinely required -- but only for the two doors this script has:
+    FROM OUTSIDE THE PROCESS, VIA SendInput OR PostMessage. It is not a closed problem in general.
+    Two other doors meet the no-foreground condition and are out of this script's scope: hooking
+    the very GetKeyState the engine polls, in-process (Sunrise's own forced-key hook), and a
+    separate desktop via CreateDesktop/SetThreadDesktop, which has its own foreground that never
+    touches the user's screen.
 
   ---------------------------------------------------------------------------------------------
   Why this is still better than what layer 2 accepted
@@ -54,8 +70,29 @@
   targets a HWND and so cannot leak anywhere either. Either way, nothing is ever typed into a
   window that is not the game's.
 
-  What it costs instead: the game window is pulled to the front. There is no way around that for
-  this engine, and it needs no human -- which is the property that actually matters here.
+  What it costs instead: the game window is pulled to the front, and the window the user was on is
+  NOT put back (see "What this disturbs" below). There is no way around the foreground for the two
+  routes this script has, and it needs no human -- which is the property that actually matters here.
+
+  ---------------------------------------------------------------------------------------------
+  What this disturbs, and what it does not put back
+  ---------------------------------------------------------------------------------------------
+
+  Taking the foreground means SW_MINIMIZE on the game window (which activates whatever is next in
+  the Z order) and then SW_RESTORE + SetForegroundWindow to pull the game in front. The window the
+  user was on is left behind the game and is deliberately NOT restored: this script cannot verify a
+  restore against a live game in the session that added this note, and an unverified focus change on
+  the critical path is a worse bet than the disturbance it would undo -- the caller asked for the
+  game to be driven, and the game is what it gets. The result JSON reports what was displaced
+  (`foregroundBefore`) and whether this script minimized anything (`minimized`), so nothing about it
+  is silent.
+
+  Two things bound the damage. The minimize/restore pair polls IsIconic instead of sleeping a flat
+  span, so the interval where the game is minimized is as short as Windows allows rather than a
+  fixed 400ms; and if this script finds the game window ALREADY minimized on entry -- exactly the
+  state a previous run killed at PRESS_KEY_TIMEOUT_MS between the two calls would leave -- it
+  restores it and says so (`restoredIconicAtEntry`), so that hazard self-heals on the next call
+  rather than needing a human.
 
   Emits exactly one line of JSON on stdout via [Console]::Out.WriteLine, mirroring launch-game.ps1:
   Write-Output routes through PowerShell's success-stream formatter, which wraps long lines at the
@@ -114,6 +151,9 @@ public class SunriseKeyPress {
 
   [DllImport("user32.dll", SetLastError = true)]
   public static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool IsIconic(IntPtr hWnd);
 }
 "@
 
@@ -139,15 +179,42 @@ if ($hwnd -eq [IntPtr]::Zero) {
 }
 
 # ---------------------------------------------------------------- take the foreground, and check
+$SW_MINIMIZE = 6
+$SW_RESTORE = 9
+
+# Record what we are about to displace, so the result can say it rather than leaving the user to
+# work out why their window went behind the game.
+$foregroundBefore = [SunriseKeyPress]::GetForegroundWindow()
+$foregroundBeforeText = ('0x{0:X}' -f $foregroundBefore.ToInt64())
+
+# Self-heal: a run killed at PRESS_KEY_TIMEOUT_MS between the minimize and the restore below leaves
+# the game minimized in a state this script created. Undo that on entry rather than pressing into
+# it, and report having done so.
+$restoredIconicAtEntry = $false
+if ([SunriseKeyPress]::IsIconic($hwnd)) {
+  [void][SunriseKeyPress]::ShowWindow($hwnd, $SW_RESTORE)
+  $restoredIconicAtEntry = $true
+  Start-Sleep -Milliseconds 300
+}
+
 $alreadyForeground = ([SunriseKeyPress]::GetForegroundWindow() -eq $hwnd)
 $setForegroundResult = $null
+$minimized = $false
 if (-not $alreadyForeground) {
   # A bare SetForegroundWindow is refused (measured: False, foreground unchanged) because this
   # process is not in the foreground and has had no user input. Restoring a minimized window
   # activates it, and that path Windows does allow.
-  [void][SunriseKeyPress]::ShowWindow($hwnd, 6)   # SW_MINIMIZE
-  Start-Sleep -Milliseconds 400
-  [void][SunriseKeyPress]::ShowWindow($hwnd, 9)   # SW_RESTORE
+  #
+  # Poll IsIconic rather than sleeping a flat 400ms: this is the interval in which the game sits
+  # minimized, and it is also the interval in which a killed script strands it there, so it is kept
+  # to whatever Windows actually needs instead of a guessed worst case.
+  [void][SunriseKeyPress]::ShowWindow($hwnd, $SW_MINIMIZE)
+  $minimized = $true
+  for ($i = 0; $i -lt 12; $i++) {
+    if ([SunriseKeyPress]::IsIconic($hwnd)) { break }
+    Start-Sleep -Milliseconds 50
+  }
+  [void][SunriseKeyPress]::ShowWindow($hwnd, $SW_RESTORE)
   [void][SunriseKeyPress]::BringWindowToTop($hwnd)
   $setForegroundResult = [SunriseKeyPress]::SetForegroundWindow($hwnd)
 }
@@ -220,9 +287,15 @@ if ($foregroundIsGame) {
     status = 'sent'
     route = 'sendInput'
     hwnd = ('0x{0:X}' -f $hwnd.ToInt64())
+    foregroundBefore = $foregroundBeforeText
+    restoredIconicAtEntry = $restoredIconicAtEntry
+    minimized = $minimized
     alreadyForeground = $alreadyForeground
     setForegroundResult = $setForegroundResult
-    foregroundIsGame = $true
+    # The measured variable, never the literal $true the enclosing branch would make "true anyway".
+    # This is the one field the whole no-leak argument rests on; it must not be able to lie, and a
+    # future edit that moves this write outside the branch must not silently turn it into a claim.
+    foregroundIsGame = $foregroundIsGame
     down = $downCount
     up = $upCount
   }
@@ -253,9 +326,12 @@ Write-Result @{
   status = $postStatus
   route = 'postMessage'
   hwnd = ('0x{0:X}' -f $hwnd.ToInt64())
+  foregroundBefore = $foregroundBeforeText
+  restoredIconicAtEntry = $restoredIconicAtEntry
+  minimized = $minimized
   alreadyForeground = $alreadyForeground
   setForegroundResult = $setForegroundResult
-  foregroundIsGame = $false
+  foregroundIsGame = $foregroundIsGame
   postedDown = $postedDown
   postedUp = $postedUp
 }

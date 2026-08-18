@@ -95,15 +95,34 @@ now written into `scripts/press-title-screen-key.ps1`'s header:
   `SendMessage` of `WM_KEYDOWN`/`WM_KEYUP`/`WM_CHAR`, aimed at the visible `Tiger D3D Window`, at
   the hidden `Tiger Input Window` the process also owns, and at both windows' thread queues via
   `PostThreadMessage`, all returned success and none moved anything — with or without a faked
-  `WM_ACTIVATE`/`WM_SETFOCUS` first. That is the signature of Raw Input or DirectInput, which the OS
-  serves only to the foreground application. With the struct fixed, `SendInput` dismisses the title
-  screen instantly when the game holds the foreground and does nothing at all when it does not, both
+  `WM_ACTIVATE`/`WM_SETFOCUS` first. With the struct fixed, `SendInput` dismisses the title screen
+  instantly when the game holds the foreground and does nothing at all when it does not, both
   measured on the same launch.
 
+**The reason both of those hold is one API, known by name rather than inferred: the engine polls
+`GetKeyState`** — `Input_PollKeyboardState105`, RVA `0x003447A0`, from static analysis of the mapped
+dump. `GetKeyState` reads the per-thread *synchronous* key-state table, which is updated only when
+that thread pulls real hardware input off its queue. A posted message never touches it, so no
+`PostMessage`/`SendMessage`/`PostThreadMessage` can move this screen at any window on any thread;
+and injected input only ever reaches the *foreground* thread's queue. (An earlier revision of this
+section said "the signature of Raw Input or DirectInput". Every behavioural conclusion survived, the
+attributed API did not. The name matters: the follow-on route — Sunrise's own hook intercepting that
+polled `GetKeyState` in-process — is discoverable from `GetKeyState` and invisible from Raw Input.)
+
+**Scope of "the foreground is required".** It is required *from outside the process, via `SendInput`
+or `PostMessage`* — the two doors the MCP has. It is not a closed problem in general. Two others meet
+the no-foreground condition and belong to later tasks: hooking the very `GetKeyState` the engine
+polls, **in-process** (that is Sunrise's existing forced-key hook), and a separate desktop via
+`CreateDesktop`/`SetThreadDesktop`, which has its own foreground that never touches the user's screen.
+
 **So `SendInput` is the primary route and `PostMessage` the fallback, and the result names which one
-ran** (`PressResult.route`, surfaced by `game_enter` as `route` in its response). `postMessage` in a
-result means the foreground could not be taken, and — given the measurement above — that the press
-most likely did nothing; that name is what someone reads when this breaks again.
+ran** (`PressResult.route`, surfaced by `game_enter` as `route`). **`postMessage` always comes back
+as `status: 'failed'`, at stage `keyPress`** — not as a weaker success. Two messages accepted by a
+queue nobody reads is not a press, and `'sent'` is the exact gate `game_enter` uses to commit its
+durable press record; letting the fallback through it would widen that record's input contract from
+"a keystroke was delivered" to "some messages were queued", burn the 120s world-load wait, fail at
+the wrong stage, and then refuse to press on a retry. Failing at `keyPress` instead stops in about a
+second, writes no record, and leaves a retry free to try again.
 
 **The keystroke-leak defect layer 2 accepted is gone.** `SendInput` targets whatever window has OS
 foreground focus, so layer 2 knowingly accepted that a press could land in whatever the user had
@@ -112,7 +131,21 @@ alt-tabbed to. The script now brings the game window to the front (minimize → 
 window is permitted) and injects **only** once `GetForegroundWindow()` has been read back and found
 to be the game's own window. If the foreground cannot be taken it injects nothing at all and posts to
 the HWND instead, which can't leak either. What it costs instead is that the game window is pulled to
-the front — unavoidable for this engine, and it needs no human, which is the property that matters.
+the front — unavoidable for the routes above, and it needs no human, which is the property that matters.
+
+**What the press disturbs, and what it does not put back.** Taking the foreground means
+`SW_MINIMIZE` on the game window (which activates whatever is next in the Z order) and then
+`SW_RESTORE` + `SetForegroundWindow`. **The window the user was on is left behind the game and is
+not restored.** That is a deliberate choice, not an oversight: a restore could not be verified
+against a live game in the session that introduced it, and an unverified focus change on the critical
+path is a worse bet than the disturbance it would undo — the caller asked for the game to be driven.
+The result JSON reports what was displaced (`foregroundBefore`) and whether the script minimized
+anything (`minimized`), so none of it is silent. Two things bound the damage: the minimize/restore
+pair polls `IsIconic` rather than sleeping a flat 400ms, keeping the minimized interval as short as
+Windows allows; and if the script finds the game window **already** minimized on entry — exactly what
+a previous run killed at `PRESS_KEY_TIMEOUT_MS` between those two calls would leave — it restores it
+and reports `restoredIconicAtEntry`, so that hazard self-heals on the next call instead of needing a
+human.
 
 **Windows agreeing the window is foreground is not the same as the engine having re-acquired the
 keyboard.** Pressing the instant `GetForegroundWindow()` first agreed, right after the
@@ -330,15 +363,24 @@ the repeat-call idempotency finding described above — that `sinceOffset` makes
 marker already in the file before that offset was captured, matching only content appended after it.
 
 It also covers `interpretPressKeyOutput`, the pure half of `pressTitleScreenKey`: the sendInput
-route reporting a confirmed foreground; the postMessage fallback reported as its *own* route, with a
-message that refuses to imply the title screen moved; a zero `SendInput` count treated as a failure
-rather than a success; the script's own null-keystroke guard surfaced verbatim instead of behind a
-generic message; the `no-game` case carrying no route because nothing was attempted; `null` when
-nothing parses, so a killed process stays distinguishable from an outcome; the result line being
+route reporting a confirmed foreground; the postMessage fallback reported as `failed` rather than a
+weaker `sent`, so it can never reach the press-record gate; a zero `SendInput` count treated as a
+failure rather than a success; the script's own null-keystroke guard surfaced verbatim instead of
+behind a generic message; the `no-game` case carrying no route because nothing was attempted; `null`
+when nothing parses, so a killed process stays distinguishable from an outcome; the result line being
 found among PowerShell noise by scanning from the end; and an unknown route value rejected outright,
 since callers switch on that name and an unmodelled one would fall through every branch silently.
-Each of these is fed the literal JSON `press-title-screen-key.ps1` emits, so they break if the script
-and the parser ever drift apart.
+
+Those cases are fed hand-written JSON, so **on their own they prove the parser and nothing about the
+script** — a key renamed in `press-title-screen-key.ps1` would leave all of them green while
+`interpretPressKeyOutput` silently stopped seeing that field, since every optional field is tolerated
+as absent (`foregroundIsGame` included, which is the one fact the no-leak argument rests on). One
+further case closes that: it reads the `.ps1` and asserts that every field the parser reads is
+written there as an actual hashtable assignment (`name =`, so a mention in a comment cannot satisfy
+it), that both route names and every accepted status exist as literals it can emit, and that
+`foregroundIsGame` is written from the measured `$foregroundIsGame` variable rather than a `$true`
+literal. **That** is the case that fails on drift; the literal-JSON cases pin the behaviour once the
+names are known to match.
 
 Both rounds of this test were deliberately broken to confirm they can actually fail. First round:
 with the poll loop temporarily replaced by a single immediate check (i.e. the wait removed), the

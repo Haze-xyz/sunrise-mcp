@@ -29,14 +29,22 @@
  * check and (with the game running) SendInput, neither of which this script can safely fake. What
  * IS covered is interpretPressKeyOutput(), the pure half it delegates to: the part that decides
  * which route ran, whether the press counts as sent, and what a caller is told. That decision is
- * what an agent branches on when this breaks, so it is tested against the exact JSON shapes
- * press-title-screen-key.ps1 emits.
+ * what an agent branches on when this breaks.
+ *
+ * Those cases feed it hand-written JSON, so on their own they prove the parser's behaviour and
+ * nothing about the script -- a key renamed in press-title-screen-key.ps1 would leave every one of
+ * them green while interpretPressKeyOutput silently stopped seeing that field (every optional field
+ * is tolerated as absent, including foregroundIsGame, which is the one fact the no-leak argument
+ * rests on). The last case closes that gap by reading the .ps1 itself and asserting the key names
+ * and route literals it actually writes; that is the case that fails on drift, and the literal-JSON
+ * cases above it are what pin the behaviour once the names are known to match.
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, appendFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, appendFile, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import {
   waitForTitleScreen,
@@ -179,18 +187,20 @@ async function main() {
       assert.equal(result.up, 1);
     });
 
-    await test('reports the postMessage fallback as its own route and does not claim the press worked', () => {
+    await test('reports the postMessage fallback as failed, not sent, so it can never reach the press record', () => {
       const result = interpretPressKeyOutput(
         '{"status":"sent","route":"postMessage","hwnd":"0x170E5E","alreadyForeground":false,' +
           '"setForegroundResult":false,"foregroundIsGame":false,"postedDown":true,"postedUp":true}\n',
       );
-      assert.equal(result.status, 'sent');
+      // The script says 'sent' -- both posts really were accepted. The interpreter must NOT pass
+      // that through: 'sent' is the exact gate index.ts uses to commit the durable press record,
+      // and a message this engine cannot read is not a press. This is the assertion that keeps the
+      // record's input contract as narrow as the review that built it left it.
+      assert.equal(result.status, 'failed', "the fallback must not report 'sent' -- that gate commits the press record");
       assert.equal(result.route, 'postMessage', 'the fallback must be distinguishable from the primary route');
       assert.equal(result.foregroundIsGame, false);
-      // A caller reading only `status` would think the title screen moved; the message is where
-      // "this engine does not react to posted key messages" has to be said.
       assert.match(result.message, /PostMessage/);
-      assert.match(result.message, /has most likely not moved/);
+      assert.match(result.message, /GetKeyState/);
     });
 
     await test('treats a zero SendInput count as a failure, not a success, and still names the route', () => {
@@ -235,6 +245,40 @@ async function main() {
       );
       assert.equal(result.status, 'sent', 'the LAST result line wins, not the first one in the file');
       assert.equal(result.route, 'sendInput');
+    });
+
+    await test('every key and route literal this parser reads is one press-title-screen-key.ps1 actually writes', async () => {
+      // The cases above feed hand-written JSON, so none of them can notice the .ps1 renaming or
+      // dropping a key -- interpretPressKeyOutput tolerates every optional field being absent, so
+      // the drift would be silent, and foregroundIsGame going missing would quietly retire the one
+      // fact the whole no-leak argument rests on. This case reads the script and asserts the names.
+      const scriptPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'press-title-screen-key.ps1');
+      const script = await readFile(scriptPath, 'utf8');
+
+      // Every field interpretPressKeyOutput/isPressKeyScriptOutput reads, as a hashtable assignment
+      // (`name =`) so a mention in a comment cannot satisfy it.
+      for (const key of ['status', 'route', 'foregroundIsGame', 'down', 'up', 'error']) {
+        assert.match(
+          script,
+          new RegExp(`^\\s*${key}\\s*=`, 'm'),
+          `press-title-screen-key.ps1 no longer writes a "${key}" field, but keys.ts still reads it`,
+        );
+      }
+
+      // The closed union: both route names, and every status the parser accepts, must exist in the
+      // script as literals it can emit.
+      for (const literal of ["'sendInput'", "'postMessage'", "'no-game'", "'sent'", "'failed'"]) {
+        assert.ok(script.includes(literal), `press-title-screen-key.ps1 no longer emits the literal ${literal}`);
+      }
+
+      // foregroundIsGame must be reported from the measured variable, never asserted as a literal.
+      // It is true today only because of the branch it sits in; a future edit moving that write must
+      // not silently turn a measurement into a claim.
+      assert.doesNotMatch(
+        script,
+        /^\s*foregroundIsGame\s*=\s*\$(true|false)\s*$/m,
+        'foregroundIsGame must be written from $foregroundIsGame, not as a $true/$false literal',
+      );
     });
 
     await test('rejects an unknown route rather than handing a caller a name it cannot branch on', () => {

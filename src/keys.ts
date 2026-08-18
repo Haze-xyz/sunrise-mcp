@@ -23,16 +23,27 @@
  *   foreground, is why pressing Enter stopped working.
  * - `PostMessage`/`SendMessage` of WM_KEYDOWN/WM_KEYUP/WM_CHAR do not move this engine's title
  *   screen at all -- not at the visible window, not at the hidden 'Tiger Input Window' the process
- *   also owns, not at either window's thread queue. The engine reads the keyboard below the message
- *   queue (Raw Input or DirectInput), which the OS serves only to the foreground application.
+ *   also owns, not at either window's thread queue. The engine polls **`GetKeyState`**
+ *   (`Input_PollKeyboardState105`, RVA 0x003447A0, from static analysis of the mapped dump), which
+ *   reads the per-thread *synchronous* key-state table. A posted message never updates that table,
+ *   so no posted or sent message can move this screen at any window on any thread; and injected
+ *   input only ever reaches the foreground thread's queue. Both facts follow from that one API.
  *
  * So `SendInput` stays the primary route, and `PostMessage` is the fallback -- and the result says
- * which one ran. What did change is that the script now *takes and verifies* the foreground before
- * injecting anything. Layer 2's design knowingly accepted that `SendInput` goes to whatever window
- * has focus, so a press could land in whatever the user had alt-tabbed to; that defect is gone,
- * because the keystroke is injected only once `GetForegroundWindow()` has been read back and found
- * to be the game's own window. If the foreground cannot be taken, nothing is injected at all and
- * the script falls back to `PostMessage`, which targets a HWND and so cannot leak anywhere either.
+ * which one ran, always with `status: 'failed'` on the fallback, because a message this engine
+ * cannot read is not a press. What did change is that the script now *takes and verifies* the
+ * foreground before injecting anything. Layer 2's design knowingly accepted that `SendInput` goes
+ * to whatever window has focus, so a press could land in whatever the user had alt-tabbed to; that
+ * defect is gone, because the keystroke is injected only once `GetForegroundWindow()` has been read
+ * back and found to be the game's own window. If the foreground cannot be taken, nothing is injected
+ * at all and the script falls back to `PostMessage`, which targets a HWND and so cannot leak either.
+ *
+ * **Scope of the "foreground is required" claim.** It is required *from outside the process, by
+ * `SendInput` or `PostMessage`* -- the two doors this module has. It is not a closed problem in
+ * general: hooking the very `GetKeyState` the engine polls, in-process, meets the no-foreground
+ * condition exactly (that is Sunrise's own forced-key hook), and a separate desktop via
+ * `CreateDesktop`/`SetThreadDesktop` has its own foreground that never touches the user's screen.
+ * Neither is reachable from this module; both are open doors for a later task.
  */
 
 import { execFile } from 'node:child_process';
@@ -154,17 +165,19 @@ export async function waitForTitleScreen(
 /**
  * Which of `press-title-screen-key.ps1`'s two routes delivered the keystroke. Callers branch on
  * this, so it is a closed union rather than a free string: `'sendInput'` is the primary route and
- * the only one measured to move the title screen; `'postMessage'` is the fallback the script takes
- * when it could not bring the game to the foreground, which reaches the window but was measured not
- * to move this engine's title screen. A result naming `postMessage` therefore means "the press
- * probably did nothing, and here is exactly why" -- see this file's header comment.
+ * the only one that can move the title screen; `'postMessage'` is the fallback the script takes
+ * when it could not bring the game to the foreground, which reaches the window but cannot move this
+ * engine. A result naming `postMessage` therefore always carries `status: 'failed'`, and says
+ * exactly why -- see this file's header comment.
  */
 export type PressRoute = 'sendInput' | 'postMessage';
 
 export interface PressResult {
-  /** 'sent' means the named route reported delivering the keystroke; 'no-game' means destiny2.exe
-   *  was not running; 'failed' covers a zero SendInput count, a refused PostMessage, or any other
-   *  script-level problem. */
+  /** 'sent' means a keystroke was actually delivered to the game -- and nothing weaker: it is the
+   *  gate `game_enter` uses to commit its durable press record, so widening it would widen that.
+   *  'no-game' means destiny2.exe was not running. 'failed' covers a zero SendInput count, the
+   *  PostMessage fallback (which reaches the window but cannot move this engine -- see
+   *  `interpretPressKeyOutput`), and any other script-level problem. */
   status: 'sent' | 'no-game' | 'failed';
   /** The route that ran. Absent only when nothing was attempted (no game) or the script produced
    *  no parseable result at all. */
@@ -253,19 +266,31 @@ export function interpretPressKeyOutput(stdout: string): PressResult | null {
   }
 
   if (route === 'postMessage') {
-    // The script only takes this route when it could not bring the game to the foreground, and it
-    // reports 'sent' for it when both posts were accepted. Do not upgrade that into a claim the
-    // press worked: PostMessage was measured not to move this engine's title screen. Whether the
-    // game actually moved is decided by the log wait in game_enter, not here.
+    // 'failed', even though the script reported 'sent' and both posts really were accepted by the
+    // OS. `status` here is the outcome of *pressing the title-screen key*, not of a syscall, and a
+    // posted key message provably cannot move this engine: it polls GetKeyState, the per-thread
+    // synchronous key-state table, which a posted message never updates. Two messages accepted by
+    // a queue nobody reads is not a press. The same reasoning already applies three lines down,
+    // where a down=0/up=0 SendInput the script also called 'sent' is reported as failed.
+    //
+    // This matters beyond wording: 'sent' is the exact gate in index.ts that commits the durable
+    // press record. Returning it here would widen that record's input contract from "a keystroke
+    // was delivered" to "some messages were queued" -- game_enter would then burn its 120s
+    // world-load wait, fail at the wrong stage, and refuse to press on a retry, forcing a
+    // game_kill. Failing here instead stops at stage keyPress in about a second, writes no record,
+    // and leaves a retry free to press again. The alternative -- leaving 'sent' and gating the
+    // record write on the route -- would have kept both the wasted wait and the wrong stage, and
+    // would have put route knowledge inside the record block this task must not disturb.
     return {
-      status: 'sent',
+      status: 'failed',
       route,
       ...(parsed.foregroundIsGame !== undefined ? { foregroundIsGame: parsed.foregroundIsGame } : {}),
       message:
         'The game could not be brought to the foreground, so Enter was posted to its window with ' +
-        'PostMessage instead of injected with SendInput. That reaches the right window and leaks ' +
-        'nothing, but this engine was measured not to react to posted key messages, so the title ' +
-        'screen has most likely not moved.',
+        'PostMessage instead of injected with SendInput. Both posts were accepted, and nothing was ' +
+        'leaked into another window -- but this engine polls GetKeyState, which a posted message ' +
+        'never updates, so the title screen has not moved. Treated as a failed press rather than a ' +
+        'sent one, so no press record is written and a retry is free to try again.',
     };
   }
 
