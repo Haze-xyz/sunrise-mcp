@@ -85,8 +85,8 @@ same reasoning is written in `scripts/press-title-screen-key.ps1` and `src/keys.
 wait for the `bootflow:start` marker, press Enter via `SendInput`, then wait for the
 `successfully changed world to: orbit_d2` line. **It leaves the game at the character-selection
 screen** — choosing a character is a separate tool, not yet built. On failure it reports which stage
-it stopped at (`launch`, `titleScreen`, `keyPress`, or `worldLoad`), since that's what a calling
-agent needs to know to react sensibly rather than just that something went wrong.
+it stopped at (`launch`, `titleScreen`, `keyPress`, `worldLoad`, or `ambiguous` — see below), since
+that's what a calling agent needs to know to react sensibly rather than just that something went wrong.
 
 **`game_enter` is safe to call repeatedly against an already-running game.** `sunrise.log` is
 append-only, so once `TITLE_SCREEN_MARKER`/`WORLD_LOADED_MARKER` have been written, they stay in the
@@ -117,6 +117,30 @@ screen by a direct `game_launch` call, unpressed, before `game_enter` is ever ca
 existing (unanchored, whole-file) `TITLE_SCREEN_MARKER` there is legitimate current evidence, not a
 stale leftover. Both mechanisms together are what make `game_enter` idempotent without either firing
 a spurious keystroke or refusing to press a game that is honestly still waiting at the title screen.
+
+**That first fix still had a gap, found on re-review: a game that is past the title screen but not
+yet in orbit.** If the world hasn't loaded yet — still loading, or a prior call that already pressed
+and then timed out waiting for the world — the log shows exactly `TITLE_SCREEN_MARKER` present,
+`WORLD_LOADED_MARKER` absent: the identical signature to a game that was genuinely never pressed. The
+log alone cannot tell these apart, so re-checking it harder was never going to close this; the
+world-loaded short-circuit doesn't fire (the world hasn't loaded), and the unanchored title check
+(needed to preserve the legitimate case above) matches the leftover title marker and presses again.
+The fix is a second, independent signal the log can't provide: `game_enter` now remembers, in
+process memory only, the pid of the destiny2.exe process it has already pressed Enter for this
+server's lifetime (invalidated the moment the game is next observed not running). A repeat call
+against the same still-running pid recognizes it already pressed and resumes waiting for the world to
+load without pressing again; a game whose pid can't even be determined (a `tasklist`-parsing edge
+case) is treated the same as genuinely ambiguous and declined rather than guessed at, surfaced as a
+new `ambiguous` failure stage. This memory is deliberately in-process and not persisted: a server
+restart loses it, which is an accepted, documented limitation, not a residual version of the bug —
+the two remaining failure modes it implies (a restarted server re-pressing a game it doesn't remember
+already pressed; two separate server processes both driving the same game) are outside what a
+single-process, single-driver tool like this one can solve without a log marker this project has no
+sample of and must not launch the game to go looking for. The whole decision — given whether the game
+is running, its pid is known, the world/title markers are present, and this server already pressed
+this session, what to do next — is pulled out of `index.ts` into a pure function,
+`decideGameEnterAction` in `src/game-enter-decision.ts`, precisely so it can be pinned by a table of
+cases instead of only reasoned about against real wiring that needs the actual game to run end to end.
 
 The `INPUT` struct `press-title-screen-key.ps1` passes to `SendInput` is 40 bytes on x64. A
 declaration missing the two trailing `int` padding fields comes out 32 bytes, and `SendInput` then
@@ -225,6 +249,38 @@ not running) was instead verified directly: with `destiny2.exe` confirmed not ru
 under real Windows `node.exe` returned `{"status":"no-game", ...}` cleanly rather than throwing, in
 about half a second. The `SendInput` path itself remains unproven until a session with the real
 game — see "Design notes and known limits" below.
+
+### Testing game_enter's branch selection without the game or the filesystem
+
+`game_enter`'s own decision of what to do next — launch, short-circuit to `ok`, press then wait,
+resume waiting without pressing, or decline — is pulled out of `index.ts` into a pure function,
+`decideGameEnterAction` in `src/game-enter-decision.ts`. It takes nothing but plain booleans (is the
+game running, is its pid known, is the world marker present, is the title marker present, did this
+server already press this session) and returns which action to take, with no file reads, no process
+checks, and no `SendInput` — which is what makes it testable directly, with a plain table of cases,
+in `scripts/game-enter-decision-smoke.mjs`:
+
+```
+npm run test:keys   # also runs scripts/game-enter-decision-smoke.mjs, after keys-smoke.mjs
+```
+
+The table covers the five situations traced by hand in the review that found the repeat-call gap
+(not running; already fully past the title screen; already pressed this session and still loading —
+the finding itself; never pressed, title marker present; never pressed, title marker absent) plus one
+defensive case beyond them (the game's pid can't be determined) and one priority check (a world
+already loaded always wins over a stale press record, even if both are true at once). It was
+deliberately broken to confirm it can actually fail: with the "already pressed this session" check
+removed (reverting to the exact bug the review found — a repeat call always proceeds to press,
+whether or not this server already pressed), the finding's own case failed as expected (`11/12
+passed`, exit code 1) while every other case still passed, then all twelve passed again once
+restored. The same script also checks `parseTasklistCsv` (`src/tasklist.ts`) against real
+`tasklist.exe` output captured live during this review round: a genuine "not found" `INFO:` line, the
+exact CSV shape a match takes, and an unparseable pid field falling back to `pid: null` rather than
+throwing or guessing. See `task-3-report.md`'s second fix report for the full pasted output.
+
+What this still cannot prove without the real game: that `getGameProcessInfo()`'s live `tasklist`
+call and the actual `SendInput` press interact correctly end to end, and in particular whether the
+in-process pid memory behaves as intended against a real relaunch or a real world-load sequence.
 
 ## Testing against a live game
 
@@ -359,8 +415,14 @@ from this exact script (it did in the original probe, run by hand, not through t
 - `src/keys.ts` — getting past the title screen: `waitForTitleScreen`/`waitForLogMarker` (poll
   `sunrise.log` for a marker line) and `pressTitleScreenKey` (the `SendInput` keystroke). See
   "Getting past the title screen" above.
-- `src/index.ts` — the MCP server: six tools over stdio, wiring `endpoint.ts`, `game.ts`, and
-  `keys.ts` together.
+- `src/tasklist.ts` — `getGameProcessInfo`/`parseTasklistCsv`: whether destiny2.exe is running and
+  its pid, via `tasklist`. Split out from `index.ts` so the pure parsing logic is importable by a
+  test without pulling in `index.ts`'s module-load side effect of connecting an MCP stdio transport.
+- `src/game-enter-decision.ts` — `decideGameEnterAction`, the pure branch-selection logic behind
+  `game_enter`, extracted so it can be tested with a table of cases. See "Testing game_enter's branch
+  selection without the game or the filesystem" above.
+- `src/index.ts` — the MCP server: six tools over stdio, wiring `endpoint.ts`, `game.ts`, `keys.ts`,
+  `tasklist.ts`, and `game-enter-decision.ts` together.
 - `scripts/launch-game.ps1` — launch + window-wait, adapted from
   `a local capture script` (same kill-existing /
   `Start-Process -PassThru` / poll-`MainWindowHandle` shape; the capture/dump/close steps that
@@ -369,4 +431,7 @@ from this exact script (it did in the original probe, run by hand, not through t
 - `scripts/endpoint-smoke.mjs` — the fake-server test for `endpoint.ts` described above.
 - `scripts/keys-smoke.mjs` — the temp-log-file test for `waitForTitleScreen`/`waitForLogMarker`,
   described in "Testing keys.ts without the game".
+- `scripts/game-enter-decision-smoke.mjs` — the table-driven test for `decideGameEnterAction` and
+  `parseTasklistCsv`, described in "Testing game_enter's branch selection without the game or the
+  filesystem". Also run by `npm run test:keys`.
 - `scripts/smoke.mjs` — the live-game counterpart, described in "Testing against a live game".

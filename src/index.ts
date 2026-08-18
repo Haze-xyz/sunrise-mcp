@@ -6,8 +6,6 @@
  * WSL node.
  */
 
-import { execFile } from 'node:child_process';
-
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -23,6 +21,8 @@ import {
   waitForLogMarker,
   waitForTitleScreen,
 } from './keys.js';
+import { decideGameEnterAction } from './game-enter-decision.js';
+import { getGameProcessInfo } from './tasklist.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -68,16 +68,14 @@ function errorResult(err: unknown): CallToolResult {
  *  of headroom rather than pretending to a number that hasn't actually been timed. */
 const WORLD_LOAD_TIMEOUT_MS = 120_000;
 
-/** Checks for a running destiny2.exe via `tasklist`, so `game_enter` only launches when it needs to
- *  rather than unconditionally killing and restarting a game that may already be past the title
- *  screen (launchGame() itself always kills any existing instance first). */
-function isGameRunning(): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile('tasklist.exe', ['/FI', 'IMAGENAME eq destiny2.exe', '/NH'], { windowsHide: true }, (error, stdout) => {
-      resolve(!error && /destiny2\.exe/i.test(stdout));
-    });
-  });
-}
+/** The pid of the destiny2.exe process this server has already pressed Enter for during its own
+ *  lifetime, or null if it hasn't (or the last time this was checked, the game wasn't running). This
+ *  is the only positive evidence available to distinguish a game genuinely still sitting, unpressed,
+ *  at the title screen from one this server already pressed and is still loading -- both look
+ *  identical in sunrise.log (see game-enter-decision.ts). Deliberately in-process, not persisted: a
+ *  server restart loses it, which is an accepted, documented limitation (see README.md), not a gap
+ *  this fix claims to close. */
+let pressedForPid: number | null = null;
 
 const server = new McpServer({ name: 'sunrise-mcp', version: '0.1.0' });
 
@@ -190,12 +188,15 @@ server.registerTool(
       'roughly 40s before the title screen can actually accept input, so calling console_run or pressing a key ' +
       'right after game_launch resolves does nothing), presses Enter as an OS-level SendInput keystroke (the ' +
       'one place in this whole project that is legitimate, because the title screen precedes every key hook the ' +
-      'DLL installs), then waits for the log line marking the world finishing loading. If the game is already ' +
-      'running and has already loaded a world in this session, this is a safe no-op that reports ok without ' +
-      'pressing anything again -- safe to call repeatedly, e.g. as a precondition before other tools. Leaves the ' +
-      'game at the character-selection screen for now -- choosing a character is a separate tool not yet built. ' +
-      'On failure, the response names which stage it stopped at (launch, titleScreen, keyPress, or worldLoad) so ' +
-      'a caller knows what actually went wrong rather than just that something did.',
+      'DLL installs), then waits for the log line marking the world finishing loading. Safe to call repeatedly ' +
+      'against an already-running game, e.g. as a precondition before other tools: if a world has already loaded ' +
+      'this session, it reports ok without pressing anything; if this server already pressed Enter earlier this ' +
+      'session and the world is still loading, it resumes waiting without pressing again rather than risking a ' +
+      'second keystroke into whatever the game is currently showing; if it cannot tell whether the game has ' +
+      'already been pressed (an ambiguous or undeterminable state), it declines to press at all. Leaves the game ' +
+      'at the character-selection screen for now -- choosing a character is a separate tool not yet built. On ' +
+      'failure, the response names which stage it stopped at (launch, titleScreen, keyPress, worldLoad, or ' +
+      'ambiguous) so a caller knows what actually went wrong rather than just that something did.',
   },
   async (): Promise<CallToolResult> => {
     // Which stage failed is the whole point of this tool's error reporting (see its description),
@@ -210,60 +211,109 @@ server.registerTool(
 
     let stage = 'launch';
     try {
-      const running = await isGameRunning();
-      // Whole-file offset (0): nothing could be stale yet on this path, since a fresh launch's own
-      // wait is anchored below instead, and the not-yet-past-title-screen path (see the else branch)
-      // hasn't completed a pass in this log at all.
+      const logPath = getLogPath();
+      const proc = await getGameProcessInfo();
+      if (!proc.running) pressedForPid = null; // invalidate: whatever we remembered no longer applies.
+
+      // See game-enter-decision.ts for the branch-selection logic itself and why each of these
+      // observations is exactly what's needed (no more, no less) to decide what to do next.
+      const worldMarkerPresent = proc.running ? await waitForLogMarker(WORLD_LOADED_MARKER, 0, logPath) : false;
+      const titleMarkerPresent =
+        proc.running && !worldMarkerPresent ? await waitForLogMarker(TITLE_SCREEN_MARKER, 0, logPath) : false;
+      const pressedThisSession = proc.running && proc.pid !== null && pressedForPid === proc.pid;
+
+      const decision = decideGameEnterAction({
+        running: proc.running,
+        pidKnown: proc.pid !== null,
+        worldMarkerPresent,
+        titleMarkerPresent,
+        pressedThisSession,
+      });
+
+      let currentPid = proc.pid;
+      // Whole-file offset (0) unless a fresh launch below anchors it instead: WORLD_LOADED_MARKER's
+      // absence (already checked above, since decision !== 'shortCircuitOk'/'resumeWorldWait' here)
+      // proves no full pass has completed in this log yet, so an existing TITLE_SCREEN_MARKER is
+      // legitimate current evidence, not a stale leftover -- e.g. the game was started by a direct
+      // game_launch call and is genuinely still sitting at the title screen, unpressed.
       let titleWaitOffset = 0;
 
-      if (!running) {
-        const launch = await launchGame();
-        if (launch.status !== 'launched') return fail(stage, launch.message);
-        // launchGame() kills any existing process and starts a new one, but reuses the same
-        // sunrise.log path. If the engine doesn't truncate that file on a fresh start, whatever the
-        // previous process already wrote (including a stale TITLE_SCREEN_MARKER or even
-        // WORLD_LOADED_MARKER) is still sitting in it. Anchoring to the log's size right after this
-        // launch means only a marker THIS new process actually writes can satisfy the wait below.
-        titleWaitOffset = await currentLogSize(getLogPath());
-      } else {
-        // The game was already running, so no launch (and no fresh-launch offset) happened above.
-        // sunrise.log is append-only: once a marker is written it stays for the rest of that
-        // process's life, so a whole-file check can't tell "just reached this state" from "reached
-        // it once, a while ago, and hasn't moved since". WORLD_LOADED_MARKER only ever appears after
-        // a press has already worked, so if it's anywhere in the log, a full pass already happened
-        // in this session -- a repeat call must not press Enter again into whatever the game is
-        // showing now (menu, character select, mid-gameplay) or claim a fresh 'ok' for work it
-        // didn't do. waitForLogMarker(..., 0) with timeoutMs 0 is a single immediate check, not a
-        // wait: the deadline is already now, so the loop below checks once and returns.
-        const alreadyPastTitleScreen = await waitForLogMarker(WORLD_LOADED_MARKER, 0, getLogPath());
-        if (alreadyPastTitleScreen) {
+      switch (decision.kind) {
+        case 'decline':
+          return fail('ambiguous', decision.reason);
+
+        case 'shortCircuitOk':
           return textResult({
             status: 'ok',
             message: 'The game was already past the title screen with a world loaded; nothing to press.',
           });
+
+        case 'resumeWorldWait': {
+          // This server already pressed Enter for this exact pid earlier (pressedForPid matched) --
+          // pressing again would risk a second, spurious keystroke into whatever the game is
+          // currently showing. Resume waiting for the world to finish loading instead; no fresh
+          // offset needed here since WORLD_LOADED_MARKER was just proven absent above, so anything
+          // that satisfies this wait from here on is unambiguously new.
+          stage = 'worldLoad';
+          const enteredWorld = await waitForLogMarker(WORLD_LOADED_MARKER, WORLD_LOAD_TIMEOUT_MS, logPath);
+          if (!enteredWorld) {
+            return fail(
+              stage,
+              `Timed out waiting for "${WORLD_LOADED_MARKER}" in sunrise.log (Enter was already pressed earlier ` +
+                'this session, so it was not pressed again).',
+            );
+          }
+          return textResult({
+            status: 'ok',
+            message: 'The game reached the character-selection screen (Enter had already been pressed earlier this session).',
+          });
         }
-        // Falls through with titleWaitOffset still 0 (whole-file): WORLD_LOADED_MARKER's absence
-        // just proved no full pass has completed in this log yet, so an existing TITLE_SCREEN_MARKER
-        // here is legitimate current evidence, not stale leftovers -- e.g. the game was started by a
-        // direct game_launch call and is genuinely still sitting at the title screen, unpressed.
+
+        case 'launch': {
+          const launch = await launchGame();
+          if (launch.status !== 'launched') return fail(stage, launch.message);
+          // launchGame()'s own PowerShell script normally reports the pid directly, but fall back to
+          // asking tasklist (the same mechanism getGameProcessInfo() already uses) if it didn't, so a
+          // rare parsing gap on the launch side doesn't quietly cost this the pressedForPid record
+          // below -- that record is the only thing that later stops a retry from re-pressing.
+          currentPid = launch.pid ?? (await getGameProcessInfo()).pid;
+          // launchGame() kills any existing process and starts a new one, but reuses the same
+          // sunrise.log path. If the engine doesn't truncate that file on a fresh start, whatever
+          // the previous process already wrote (including a stale TITLE_SCREEN_MARKER or even
+          // WORLD_LOADED_MARKER) is still sitting in it. Anchoring to the log's size right after
+          // this launch means only a marker THIS new process actually writes can satisfy the wait
+          // below.
+          titleWaitOffset = await currentLogSize(logPath);
+          break;
+        }
+
+        case 'proceed':
+          break; // titleWaitOffset stays 0 -- see the comment above the switch.
       }
 
       stage = 'titleScreen';
-      const sawTitleScreen = await waitForTitleScreen(undefined, getLogPath(), titleWaitOffset);
+      const sawTitleScreen = await waitForTitleScreen(undefined, logPath, titleWaitOffset);
       if (!sawTitleScreen) {
         return fail(stage, `Timed out waiting for "${TITLE_SCREEN_MARKER}" in sunrise.log. The game may still be booting.`);
       }
 
       stage = 'keyPress';
       // Anchor the world-load wait to right before the press: this is what proves the marker found
-      // below was produced by THIS press, not a stale one already sitting in the log -- the same
-      // finding this whole block guards against, applied to the second marker.
-      const preKeyPressOffset = await currentLogSize(getLogPath());
+      // below was produced by THIS press, not a stale one already sitting in the log.
+      const preKeyPressOffset = await currentLogSize(logPath);
       const press = await pressTitleScreenKey();
       if (press.status !== 'sent') return fail(stage, press.message);
+      // Record that we pressed for this pid, so a retry from this same server against the same
+      // process knows to skip straight to resumeWorldWait instead of pressing again. If the pid
+      // still couldn't be determined even after the launch-path fallback above, this degrades to a
+      // real (if narrow) residual risk rather than a fabricated safe one: a later retry, if tasklist
+      // manages to determine the pid by then, would see no matching record and re-press. There is no
+      // way to close that without a positive record to check against, which is exactly what's
+      // missing in this corner.
+      if (currentPid !== null) pressedForPid = currentPid;
 
       stage = 'worldLoad';
-      const enteredWorld = await waitForLogMarker(WORLD_LOADED_MARKER, WORLD_LOAD_TIMEOUT_MS, getLogPath(), preKeyPressOffset);
+      const enteredWorld = await waitForLogMarker(WORLD_LOADED_MARKER, WORLD_LOAD_TIMEOUT_MS, logPath, preKeyPressOffset);
       if (!enteredWorld) {
         return fail(stage, `Timed out waiting for "${WORLD_LOADED_MARKER}" in sunrise.log after pressing Enter.`);
       }
