@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * Sunrise MCP server: five tools over stdio, backed by the console endpoint client (endpoint.ts)
- * and the Windows game/log helpers (game.ts). See README.md for the WSL-vs-Windows constraint —
- * this process must be run by Windows node.exe, not WSL node.
+ * Sunrise MCP server: six tools over stdio, backed by the console endpoint client (endpoint.ts),
+ * the Windows game/log helpers (game.ts), and the title-screen key-press helpers (keys.ts). See
+ * README.md for the WSL-vs-Windows constraint — this process must be run by Windows node.exe, not
+ * WSL node.
  */
+
+import { execFile } from 'node:child_process';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -12,6 +15,7 @@ import { z } from 'zod';
 
 import { SunriseEndpointClient, type DescribeResponse, type RunResponse } from './endpoint.js';
 import { DEFAULT_LOG_LINES, MAX_LOG_LINES, getExePath, getLogPath, killGame, launchGame, readLog } from './game.js';
+import { TITLE_SCREEN_MARKER, WORLD_LOADED_MARKER, pressTitleScreenKey, waitForLogMarker, waitForTitleScreen } from './keys.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -53,6 +57,21 @@ function errorResult(err: unknown): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
+/** True once the world-load line lands in sunrise.log; not measured precisely, so this leaves a lot
+ *  of headroom rather than pretending to a number that hasn't actually been timed. */
+const WORLD_LOAD_TIMEOUT_MS = 120_000;
+
+/** Checks for a running destiny2.exe via `tasklist`, so `game_enter` only launches when it needs to
+ *  rather than unconditionally killing and restarting a game that may already be past the title
+ *  screen (launchGame() itself always kills any existing instance first). */
+function isGameRunning(): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('tasklist.exe', ['/FI', 'IMAGENAME eq destiny2.exe', '/NH'], { windowsHide: true }, (error, stdout) => {
+      resolve(!error && /destiny2\.exe/i.test(stdout));
+    });
+  });
+}
+
 const server = new McpServer({ name: 'sunrise-mcp', version: '0.1.0' });
 
 server.registerTool(
@@ -62,9 +81,9 @@ server.registerTool(
       'Runs one line in the Sunrise in-game console over the loopback endpoint and returns the structured ' +
       'response: status (one of ok, unknownName, wrongArgumentCount, badArgument, outOfRange, refused, failed), ' +
       'a summary string, and rows of key/value pairs. The endpoint answers from the title screen, before the ' +
-      'player presses anything, so this works before any load. Note: layer 1 has no key-input primitive, so the ' +
-      'game currently stops at a "PRESS ENTER TO PLAY" title screen this tool cannot get past — every registry ' +
-      'entry is console.*, log.*, movement.*, or player.infinite_ammo. Getting past the title screen is layer 2. ' +
+      'player presses anything, so this works before any load. Note: this tool has no key-input primitive of its ' +
+      'own, so it cannot by itself get past a "PRESS ENTER TO PLAY" title screen or later loading screens -- use ' +
+      'game_enter for that; console_run\'s own registry is console.*, log.*, movement.*, and player.infinite_ammo. ' +
       'One line only, at most ~493 bytes once wrapped as {"id":N,"line":"..."} in the 512-byte request envelope; ' +
       'longer lines are rejected locally before anything is sent.',
     inputSchema: {
@@ -150,6 +169,64 @@ server.registerTool(
       return textResult(result);
     } catch (err) {
       return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  'game_enter',
+  {
+    description:
+      'Gets the game from wherever it is (not running, or sitting at the title screen) to the character-selection ' +
+      'screen: launches destiny2.exe if it is not already running, waits for sunrise.log\'s ' +
+      `"${TITLE_SCREEN_MARKER}" line (the earliest reliable readiness signal -- game_launch itself returns ` +
+      'roughly 40s before the title screen can actually accept input, so calling console_run or pressing a key ' +
+      'right after game_launch resolves does nothing), presses Enter as an OS-level SendInput keystroke (the ' +
+      'one place in this whole project that is legitimate, because the title screen precedes every key hook the ' +
+      'DLL installs), then waits for the log line marking the world finishing loading. Leaves the game at the ' +
+      'character-selection screen for now -- choosing a character is a separate tool not yet built. On failure, ' +
+      'the response names which stage it stopped at (launch, titleScreen, keyPress, or worldLoad) so a caller ' +
+      'knows what actually went wrong rather than just that something did.',
+  },
+  async (): Promise<CallToolResult> => {
+    // Which stage failed is the whole point of this tool's error reporting (see its description),
+    // so every failure -- expected (a stage's own bad outcome) or not (an exception thrown while
+    // in it) -- goes through this one path, tagged with whichever stage was running at the time.
+    // isError: true matches every other tool in this file that reports failure (game_launch,
+    // game_kill, log_read), rather than leaving a caller to notice a 'failed' status buried in text.
+    const fail = (stage: string, message: string): CallToolResult => ({
+      content: [{ type: 'text', text: JSON.stringify({ stage, status: 'failed', message }, null, 2) }],
+      isError: true,
+    });
+
+    let stage = 'launch';
+    try {
+      const running = await isGameRunning();
+      if (!running) {
+        const launch = await launchGame();
+        if (launch.status !== 'launched') return fail(stage, launch.message);
+      }
+
+      stage = 'titleScreen';
+      const sawTitleScreen = await waitForTitleScreen();
+      if (!sawTitleScreen) {
+        return fail(stage, `Timed out waiting for "${TITLE_SCREEN_MARKER}" in sunrise.log. The game may still be booting.`);
+      }
+
+      stage = 'keyPress';
+      const press = await pressTitleScreenKey();
+      if (press.status !== 'sent') return fail(stage, press.message);
+
+      stage = 'worldLoad';
+      const enteredWorld = await waitForLogMarker(WORLD_LOADED_MARKER, WORLD_LOAD_TIMEOUT_MS);
+      if (!enteredWorld) {
+        return fail(stage, `Timed out waiting for "${WORLD_LOADED_MARKER}" in sunrise.log after pressing Enter.`);
+      }
+
+      return textResult({ status: 'ok', message: 'The game reached the character-selection screen.' });
+    } catch (err) {
+      const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      return fail(stage, message);
     }
   },
 );

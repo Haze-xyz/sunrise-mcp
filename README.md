@@ -1,7 +1,8 @@
 # sunrise-mcp
 
-MCP server for the Sunrise console endpoint. Layer 1 of the Sunrise MCP project: a TypeScript
-client for the endpoint's line protocol, plus five MCP tools built on top of it.
+MCP server for the Sunrise console endpoint. Layer 1 built a TypeScript client for the endpoint's
+line protocol plus five MCP tools on top of it; layer 2 (in progress) is adding what layer 1 could
+not do from outside the game process, starting with getting past the title screen (`game_enter`).
 
 This repo is private. It is not published anywhere and has no remote configured — keep it that
 way.
@@ -37,7 +38,7 @@ Everything is env vars, with Windows-appropriate defaults — nothing here is WS
 | `SUNRISE_ENDPOINT_PORT` | `30975` | Port the console endpoint listens on. |
 | `SUNRISE_GAME_DIR` | `E:\Destiny_Sunrise` | Game install directory. `destiny2.exe` and the log both live under here. |
 
-## The five tools
+## The six tools
 
 | Tool | Input | Output |
 |---|---|---|
@@ -46,16 +47,59 @@ Everything is env vars, with Windows-appropriate defaults — nothing here is WS
 | `game_launch` | — | Starts `destiny2.exe` (killing any existing instance first) and waits for its window. |
 | `game_kill` | — | `taskkill /IM destiny2.exe /F`. Safe to call when the game isn't running. |
 | `log_read` | `lines?: number` | The tail of `sunrise.log` (default 200 lines, capped at 1000). |
+| `game_enter` | — | Launches if needed, gets past the title screen, and waits for the world to load. Leaves the game at character selection. |
 
 Two things worth knowing before you drive this from an agent:
 
 - **The endpoint answers from the title screen**, before the player presses anything. You do not
   need to wait for a load after `game_launch` resolves — `console_run` and `console_describe` work
   immediately.
-- **`console_run` cannot get past the title screen.** The game currently stops at a
-  `PRESS ENTER TO PLAY` screen, and layer 1's registry has no key-input primitive — all 18 entries
-  are `console.*`, `log.*`, `movement.*`, and `player.infinite_ammo`. Getting past the title screen
-  is layer 2's job.
+- **`console_run` alone cannot get past the title screen** — its registry (`console.*`, `log.*`,
+  `movement.*`, `player.infinite_ammo`) has no key-input primitive of its own. Use `game_enter` for
+  that; see "Getting past the title screen" below for how it works and why.
+
+## Getting past the title screen (`game_enter`)
+
+`game_enter` (`src/keys.ts` + the wiring in `src/index.ts`) is layer 2's answer to the gap layer 1
+left: the console endpoint answers from the title screen, but nothing could get *past* it. A probe
+run against the real game on 2026-08-18 measured two things that shape everything below:
+
+- **The DLL's key hook does not reach the title screen.** Holding VK_RETURN through the hook for
+  three seconds moved nothing. `SendInput` — an OS-level keystroke injected below the game entirely
+  — did, and the game went on to load all the way to `successfully changed world to: orbit_d2`.
+- **`game_launch` resolving is not a readiness signal.** It only waits for the game's window to
+  exist, which the probe measured happening roughly 40s before the title screen can actually accept
+  input — a keystroke sent right after `game_launch` returns is lost. The signal that actually works
+  is the line `Entering state 'bootflow:start'` appearing in `sunrise.log`, measured at 8s after
+  launch in that run; a keystroke sent after that line appears worked.
+
+**`SendInput` is used nowhere else in this project, and should not be.** It targets whatever window
+currently has OS foreground focus, not a specific one, so it would leak keystrokes into whatever the
+user has alt-tabbed to. Using it here is a deliberate, narrow exception: the title screen precedes
+every hook this project installs, so it is the *only* screen with no other way in, and it is only on
+screen for a few seconds right at startup — not something that stays true later in a session. The
+same reasoning is written in `scripts/press-title-screen-key.ps1` and `src/keys.ts`'s header comment.
+
+`game_enter` composes this into one tool: launch if the game isn't already running (checked via
+`tasklist`, so a game already sitting past the title screen isn't needlessly killed and restarted),
+wait for the `bootflow:start` marker, press Enter via `SendInput`, then wait for the
+`successfully changed world to: orbit_d2` line. **It leaves the game at the character-selection
+screen** — choosing a character is a separate tool, not yet built. On failure it reports which stage
+it stopped at (`launch`, `titleScreen`, `keyPress`, or `worldLoad`), since that's what a calling
+agent needs to know to react sensibly rather than just that something went wrong.
+
+The `INPUT` struct `press-title-screen-key.ps1` passes to `SendInput` is 40 bytes on x64. A
+declaration missing the two trailing `int` padding fields comes out 32 bytes, and `SendInput` then
+silently returns `0` — no exception, no `GetLastError` anyone sees — instead of throwing; this cost
+the original probe two attempts before the 40-byte layout was found to be the fix. `down`/`up`
+counts of `0` are treated as an explicit failure on the TypeScript side (`pressTitleScreenKey`
+returns `status: 'failed'`), not folded into `'sent'`. The script emits its result via
+`[Console]::Out.WriteLine`, never `Write-Output`, for the same reason `launch-game.ps1` does:
+PowerShell's success-stream formatter wraps long lines at the console width, and a parser that reads
+only the last line would get a truncated fragment instead of the whole JSON object — `keys.ts`'s
+`parsePressKeyOutput` mirrors `game.ts`'s `parseLaunchOutput` and scans backwards from the end of
+stdout for the first line that actually parses as its expected shape, rather than trusting it's
+strictly the last line printed.
 
 ## Building
 
@@ -109,6 +153,39 @@ assertion, it's a fake server that answers out of order: `concurrent.a`'s reply 
 FIFO-dispatch mutant applied to the compiled client, the reordered-reply version of this test
 fails (and only this test — everything else still passes), then passes again once the mutant is
 reverted. Worth remembering next time a "concurrent" test is added anywhere in this repo.
+
+## Testing keys.ts without the game
+
+`waitForTitleScreen` (and the `waitForLogMarker` it's built on) never talk to the game directly —
+they poll a log file on disk. That's what makes them testable without the game: `scripts/keys-smoke.mjs`
+points them at a temp file it writes to incrementally instead of the real `sunrise.log`, using the
+`logPath` parameter both functions take (defaulting to `getLogPath()`) for exactly this reason.
+`getLogPath()` builds its path with `path.win32`, which mangles a Linux-style temp path's
+separators, so there was no way to reach a real temp file through `SUNRISE_GAME_DIR` alone under
+WSL node — the explicit parameter is the smallest change that makes this testable while staying
+source-compatible with the one-argument `waitForTitleScreen(timeoutMs)` signature.
+
+```
+npm run test:keys   # builds, then runs scripts/keys-smoke.mjs
+```
+
+It covers: `false` before the marker line is present and the timeout is hit; `true` once the marker
+is appended to the file mid-wait, returned promptly rather than riding out the full timeout; the
+timeout being respected — not rounded up to the poll interval — when it's shorter than a single
+poll; and the log file simply not existing yet (e.g. called right after launch, before the game has
+written anything).
+
+This test was deliberately broken to confirm it can actually fail: with the poll loop temporarily
+replaced by a single immediate check (i.e. the wait removed), the "marker appended mid-wait" case
+failed as expected (`3/4 passed`, exit code 1) while the other three still passed, then all four
+passed again once the loop was restored. See `task-3-report.md` for the pasted output of both runs.
+
+`pressTitleScreenKey()` shells out to a real `destiny2.exe` process check and, with the game
+running, a real `SendInput` call — neither of which this repo fakes. Its `no-game` branch (the game
+not running) was instead verified directly: with `destiny2.exe` confirmed not running, calling it
+under real Windows `node.exe` returned `{"status":"no-game", ...}` cleanly rather than throwing, in
+about half a second. The `SendInput` path itself remains unproven until a session with the real
+game — see "Design notes and known limits" below.
 
 ## Testing against a live game
 
@@ -208,6 +285,10 @@ connection while one is active.
   *next* one after a `game_kill` call (within a short window), so a deliberate shutdown doesn't
   print something that reads as an unexpected error. Every other connection error still logs
   normally — see the comment above `expectDisconnectBriefly` in `src/index.ts`.
+- **`game_enter`'s `WORLD_LOAD_TIMEOUT_MS` (120s) is an unmeasured judgment call**, unlike
+  `waitForTitleScreen`'s 30s default, which at least has one real data point (8s) behind it with
+  headroom on top. Nothing has timed how long the world actually takes to load past the title
+  screen yet — worth tightening once it has.
 
 ### Verified against the live game
 
@@ -220,19 +301,33 @@ concurrent requests resolving to their own rows) passed in 0.22s; and the full a
 sequence — `game_launch` (window up, pid reported) → `console_describe` → `console_run` write →
 `console_run` read-back → `log_read` (real log content) → `game_kill` — passed end to end in
 20.9s, including `launchGame()`'s PowerShell JSON parsing working on the first try. Not yet
-exercised: the retry-on-connect-failure path (see "Retry policy" above), and anything layer 2's
-key-input primitive would unlock past the title screen.
+exercised: the retry-on-connect-failure path (see "Retry policy" above), and — still true as of
+`game_enter` landing — the actual `SendInput` keystroke and the `game_enter` tool end to end. Task 3
+was built and tested entirely off-target (see `task-3-report.md`): `waitForTitleScreen`/
+`waitForLogMarker` were proven against a temp-file log under real polling and a deliberate-break
+falsification pass, and `pressTitleScreenKey()`'s `no-game` branch was proven under real Windows
+`node.exe` and real `powershell.exe` with `destiny2.exe` confirmed not running. What remains
+unproven until a session with the real game: that `SendInput` actually reaches the title screen
+from this exact script (it did in the original probe, run by hand, not through this code path), that
+`down`/`up` come back non-zero against the real window, and that `game_enter`'s full sequence
+(launch → title screen → keypress → world load → character selection) works end to end.
 
 ## Project layout
 
 - `src/endpoint.ts` — the endpoint client. No MCP import here, on purpose.
 - `src/game.ts` — Windows-side game process and log helpers (`game_launch`, `game_kill`,
   `log_read`), used by `index.ts`.
-- `src/index.ts` — the MCP server: five tools over stdio, wiring `endpoint.ts` and `game.ts`
-  together.
+- `src/keys.ts` — getting past the title screen: `waitForTitleScreen`/`waitForLogMarker` (poll
+  `sunrise.log` for a marker line) and `pressTitleScreenKey` (the `SendInput` keystroke). See
+  "Getting past the title screen" above.
+- `src/index.ts` — the MCP server: six tools over stdio, wiring `endpoint.ts`, `game.ts`, and
+  `keys.ts` together.
 - `scripts/launch-game.ps1` — launch + window-wait, adapted from
   `a local capture script` (same kill-existing /
   `Start-Process -PassThru` / poll-`MainWindowHandle` shape; the capture/dump/close steps that
   script also does are dropped, since `game_launch` wants the game left running).
+- `scripts/press-title-screen-key.ps1` — the `SendInput` script `pressTitleScreenKey` shells out to.
 - `scripts/endpoint-smoke.mjs` — the fake-server test for `endpoint.ts` described above.
+- `scripts/keys-smoke.mjs` — the temp-log-file test for `waitForTitleScreen`/`waitForLogMarker`,
+  described in "Testing keys.ts without the game".
 - `scripts/smoke.mjs` — the live-game counterpart, described in "Testing against a live game".

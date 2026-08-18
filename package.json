@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
     "test:endpoint": "npm run build && node scripts/endpoint-smoke.mjs",
+    "test:keys": "npm run build && node scripts/keys-smoke.mjs",
     "smoke": "npm run build && node scripts/smoke.mjs"
   },
   "dependencies": {
