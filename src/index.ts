@@ -26,6 +26,7 @@ import {
 import { decideGameEnterAction } from './game-enter-decision.js';
 import { getGameProcessInfo } from './tasklist.js';
 import { clearPressRecord, resolvePressedThisSession, writePressRecord, type PressRecord } from './press-record.js';
+import { createSerializer } from './serialize.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -95,6 +96,9 @@ function pressWindowReport(press: PressResult): Record<string, unknown> {
  *  session it doesn't belong to just by existing; cleared alongside the file the moment the game is
  *  observed not running. */
 let cachedPressRecord: PressRecord | null = null;
+
+/** Runs game_enter calls one at a time. See serialize.ts for why the whole call, not the record. */
+const serializeGameEnter = createSerializer();
 
 const server = new McpServer({ name: 'sunrise-mcp', version: '0.1.0' });
 
@@ -225,7 +229,9 @@ server.registerTool(
       'failure, the response names which stage it stopped at (launch, titleScreen, keyPress, worldLoad, or ' +
       'ambiguous) so a caller knows what actually went wrong rather than just that something did.',
   },
-  async (): Promise<CallToolResult> => {
+  // Serialized end to end: two overlapping calls would both observe "not pressed yet" before
+  // either wrote the press record, and both would fire SendInput. See serialize.ts.
+  async (): Promise<CallToolResult> => serializeGameEnter(async (): Promise<CallToolResult> => {
     // Which stage failed is the whole point of this tool's error reporting (see its description),
     // so every failure -- expected (a stage's own bad outcome) or not (an exception thrown while
     // in it) -- goes through this one path, tagged with whichever stage was running at the time.
@@ -397,7 +403,7 @@ server.registerTool(
       const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       return fail(stage, message);
     }
-  },
+  }),
 );
 
 async function main(): Promise<void> {

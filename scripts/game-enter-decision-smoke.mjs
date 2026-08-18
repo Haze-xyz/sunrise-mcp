@@ -55,6 +55,7 @@ import path from 'node:path';
 import { decideGameEnterAction } from '../dist/game-enter-decision.js';
 import { parseTasklistCsv } from '../dist/tasklist.js';
 import { clearPressRecord, isPressRecordFresh, readPressRecord, resolvePressedThisSession, writePressRecord } from '../dist/press-record.js';
+import { createSerializer } from '../dist/serialize.js';
 
 /** @type {{ name: string; ok: boolean; error?: string }[]} */
 const results = [];
@@ -287,6 +288,64 @@ async function main() {
 
   await test('parseTasklistCsv: empty output means not running', () => {
     assert.deepEqual(parseTasklistCsv(''), { running: false, pid: null });
+  });
+
+  // ---------------------------------------------------------------------------
+  // createSerializer: the call-level lock game_enter runs under.
+  //
+  // A fifth review round found the last open path to a spurious press: every guard above is a
+  // read-then-act sequence, and nothing in MCP stops a client dispatching two game_enter calls at
+  // once. Both would observe "not pressed yet" before either wrote the record, and both would fire
+  // SendInput. The first test below is the direct regression for that -- it models the check-then-
+  // act with a shared flag and asserts only one call ever gets past it -- and it fails without the
+  // serializer, since two bare concurrent calls both read the flag as false.
+  // ---------------------------------------------------------------------------
+
+  await test('createSerializer: a check-then-act pair never interleaves, so only one call acts', async () => {
+    const serialize = createSerializer();
+    let pressed = false;
+    let presses = 0;
+    /** The shape of game_enter: observe, await something, then act on the stale observation. */
+    const enter = async () => {
+      const alreadyPressed = pressed;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (!alreadyPressed) {
+        presses += 1;
+        pressed = true;
+      }
+    };
+    await Promise.all([serialize(enter), serialize(enter), serialize(enter)]);
+    assert.equal(presses, 1, 'exactly one of three concurrent calls should have pressed');
+
+    // Control: the same body without the serializer is what the bug looked like.
+    pressed = false;
+    presses = 0;
+    await Promise.all([enter(), enter(), enter()]);
+    assert.equal(presses, 3, 'unserialized, all three press -- which is the defect being closed');
+  });
+
+  await test('createSerializer: calls run in arrival order and each resolves to its own value', async () => {
+    const serialize = createSerializer();
+    const order = [];
+    const run = (label, delayMs) => async () => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      order.push(label);
+      return label;
+    };
+    // The first is the slowest on purpose: without a queue it would finish last.
+    const values = await Promise.all([serialize(run('a', 15)), serialize(run('b', 5)), serialize(run('c', 0))]);
+    assert.deepEqual(order, ['a', 'b', 'c']);
+    assert.deepEqual(values, ['a', 'b', 'c']);
+  });
+
+  await test('createSerializer: a rejected call reaches its own caller and does not poison the queue', async () => {
+    const serialize = createSerializer();
+    const boom = serialize(async () => {
+      throw new Error('boom');
+    });
+    const after = serialize(async () => 'still works');
+    await assert.rejects(boom, /boom/);
+    assert.equal(await after, 'still works');
   });
 
   const failed = results.filter((r) => !r.ok);
