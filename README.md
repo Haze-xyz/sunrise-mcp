@@ -139,13 +139,29 @@ the front — unavoidable for the routes above, and it needs no human, which is 
 not restored.** That is a deliberate choice, not an oversight: a restore could not be verified
 against a live game in the session that introduced it, and an unverified focus change on the critical
 path is a worse bet than the disturbance it would undo — the caller asked for the game to be driven.
-The result JSON reports what was displaced (`foregroundBefore`) and whether the script minimized
-anything (`minimized`), so none of it is silent. Two things bound the damage: the minimize/restore
-pair polls `IsIconic` rather than sleeping a flat 400ms, keeping the minimized interval as short as
-Windows allows; and if the script finds the game window **already** minimized on entry — exactly what
-a previous run killed at `PRESS_KEY_TIMEOUT_MS` between those two calls would leave — it restores it
-and reports `restoredIconicAtEntry`, so that hazard self-heals on the next call instead of needing a
-human.
+It **is** reported, all the way to the caller: `foregroundBefore` (the displaced window),
+`minimized` (whether the game was minimized to take the foreground) and `restoredIconicAtEntry`
+travel from the script's JSON through `PressResult` into `game_enter`'s response as a `window`
+object, on success and on every failure path alike. An agent that pulled the game in front of
+whatever the user was looking at can say which window it was. (Until these were propagated they
+existed only in the subprocess's stdout, which `pressTitleScreenKey` discards on the success path —
+so the claim "none of it is silent" was true of the script and false of the tool.)
+
+Two things bound the damage: the minimize/restore pair polls `IsIconic` rather than sleeping a flat
+400ms, keeping the minimized interval as short as Windows allows; and if the script finds the game
+window **already** minimized on entry — exactly what a previous run killed at
+`PRESS_KEY_TIMEOUT_MS` between those two calls would leave — it restores it and reports
+`restoredIconicAtEntry`, so that hazard self-heals on the next call instead of needing a human.
+
+**The self-heal was measured, and it behaves better than predicted.** The open question was whether
+Windows grants foreground-on-restore to a *new* process restoring a window that a *different,
+already-dead* process minimized — not the case originally measured, which was one process undoing
+its own minimize. It does. Contrived honestly (a separate short-lived `powershell.exe` minimizes the
+game window and exits, then the shipped script runs), three consecutive runs came back
+`restoredIconicAtEntry: true`, `alreadyForeground: true`, `minimized: false`,
+`setForegroundResult: null` — `SW_RESTORE` alone won the foreground, `SetForegroundWindow` was never
+called, and the title screen was dismissed every time. The predicted
+restore → re-minimize → restore flicker **did not happen**: the minimize/restore branch never ran.
 
 **Windows agreeing the window is foreground is not the same as the engine having re-acquired the
 keyboard.** Pressing the instant `GetForegroundWindow()` first agreed, right after the
@@ -153,6 +169,14 @@ minimize/restore, was accepted by the OS (`down=1 up=1`) and ignored by the game
 the title screen until `game_enter`'s world-load wait timed out 120s later. The script therefore
 settles 1200ms after taking the foreground — the value measured working across the restore — and
 re-reads the foreground once more before injecting, in case something took it back during the wait.
+
+**That settle is gated on whether the script activated the window, not on whether the window was
+already in front.** The self-heal measurement above forced this correction: because `SW_RESTORE`
+wins the foreground outright, the self-heal path arrives at the settle with `alreadyForeground`
+already `true`, so the original `-not $alreadyForeground` gate skipped the settle on precisely the
+path that had just activated the window — leaving 300ms between activation and the keystroke, a
+quarter of what was measured as necessary. It worked twice anyway; that is luck, not margin. The
+gate is now `restoredIconicAtEntry -or minimized`, i.e. "this invocation activated the window".
 With that settle in place: three consecutive cold `game_enter` runs and three runs where the game was
 deliberately pushed into the background first all dismissed the title screen, none failed.
 

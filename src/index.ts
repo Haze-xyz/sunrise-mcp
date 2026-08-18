@@ -21,6 +21,7 @@ import {
   pressTitleScreenKey,
   waitForLogMarker,
   waitForTitleScreen,
+  type PressResult,
 } from './keys.js';
 import { decideGameEnterAction } from './game-enter-decision.js';
 import { getGameProcessInfo } from './tasklist.js';
@@ -69,6 +70,22 @@ function errorResult(err: unknown): CallToolResult {
 /** True once the world-load line lands in sunrise.log; not measured precisely, so this leaves a lot
  *  of headroom rather than pretending to a number that hasn't actually been timed. */
 const WORLD_LOAD_TIMEOUT_MS = 120_000;
+
+/**
+ * What the title-screen press did to the window stack, folded into a `window` object for
+ * `game_enter`'s response. Taking the foreground means minimizing the game window, which pushes
+ * whatever the user was looking at behind it, and nothing puts it back -- so a caller that caused
+ * that should be able to report it rather than have it end its life in a subprocess's stdout.
+ * Returns `{}` when the script said nothing about it (e.g. the game was not running), so the field
+ * is absent rather than present-and-empty.
+ */
+function pressWindowReport(press: PressResult): Record<string, unknown> {
+  const window: Record<string, unknown> = {};
+  if (press.foregroundBefore !== undefined) window.foregroundBefore = press.foregroundBefore;
+  if (press.minimized !== undefined) window.minimized = press.minimized;
+  if (press.restoredIconicAtEntry !== undefined) window.restoredIconicAtEntry = press.restoredIconicAtEntry;
+  return Object.keys(window).length > 0 ? { window } : {};
+}
 
 /** In-process first-line cache of the last successful press, alongside the durable file
  *  press-record.ts keeps. A plain assignment cannot fail the way a file write can, so this is what
@@ -194,7 +211,10 @@ server.registerTool(
       'keyboard below the window message queue so nothing posted at its window reaches it), then waits for the ' +
       'log line marking the world finishing loading. The response names the route the press actually took: ' +
       'sendInput on success, or postMessage -- which is reported as a failure at stage keyPress, since that fallback ' +
-      'reaches the window but cannot move an engine that polls GetKeyState. Safe to call repeatedly ' +
+      'reaches the window but cannot move an engine that polls GetKeyState. The response also carries a window ' +
+      'object saying what the press did to the window stack -- which window it displaced, whether it minimized the ' +
+      'game to take the foreground, and whether it had to un-minimize a game left stranded by an earlier run -- ' +
+      'since the displaced window is never put back. Safe to call repeatedly ' +
       'against an already-running game -- including after this MCP server itself restarts -- e.g. as a ' +
       'precondition before other tools: if a world has already loaded, it reports ok without pressing anything; ' +
       'if Enter was already pressed for this exact game process and the world is still loading, it resumes ' +
@@ -211,13 +231,8 @@ server.registerTool(
     // in it) -- goes through this one path, tagged with whichever stage was running at the time.
     // isError: true matches every other tool in this file that reports failure (game_launch,
     // game_kill, log_read), rather than leaving a caller to notice a 'failed' status buried in text.
-    const fail = (stage: string, message: string, route?: string): CallToolResult => ({
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({ stage, status: 'failed', ...(route !== undefined ? { route } : {}), message }, null, 2),
-        },
-      ],
+    const fail = (stage: string, message: string, extra?: Record<string, unknown>): CallToolResult => ({
+      content: [{ type: 'text', text: JSON.stringify({ stage, status: 'failed', ...(extra ?? {}), message }, null, 2) }],
       isError: true,
     });
 
@@ -330,7 +345,12 @@ server.registerTool(
       // Unchanged gate: 'sent' still means a keystroke was actually delivered, which is exactly what
       // the press record below is allowed to be written for. The PostMessage fallback reports
       // 'failed' precisely so it cannot reach that record -- see interpretPressKeyOutput in keys.ts.
-      if (press.status !== 'sent') return fail(stage, press.message, press.route);
+      if (press.status !== 'sent') {
+        return fail(stage, press.message, {
+          ...(press.route !== undefined ? { route: press.route } : {}),
+          ...pressWindowReport(press),
+        });
+      }
       // Which route delivered the press is what a reader needs first when this next breaks, so it
       // travels with every outcome from here on -- the ok below and the worldLoad timeout alike.
       const pressRoute = press.route ?? 'unknown';
@@ -363,13 +383,14 @@ server.registerTool(
             `${pressRoute} route. ${press.message} If the game is still sitting on the title screen, the ` +
             'keystroke was accepted by the OS but not by the game; call game_kill and then game_enter again, ' +
             'since a bare game_enter retry will resume waiting instead of pressing again.',
-          pressRoute,
+          { route: pressRoute, ...pressWindowReport(press) },
         );
       }
 
       return textResult({
         status: 'ok',
         route: pressRoute,
+        ...pressWindowReport(press),
         message: 'The game reached the character-selection screen.',
       });
     } catch (err) {

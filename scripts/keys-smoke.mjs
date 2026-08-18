@@ -247,6 +247,38 @@ async function main() {
       assert.equal(result.route, 'sendInput');
     });
 
+    await test('carries the window-state facts through to the caller instead of losing them in stdout', () => {
+      // The script has always written these; until they were propagated, pressTitleScreenKey threw
+      // the raw stdout away on the success path and game_enter's caller never saw them. An agent
+      // that pulled the game in front of whatever the user was looking at has to be able to say so.
+      const sent = interpretPressKeyOutput(
+        '{"status":"sent","route":"sendInput","hwnd":"0x170E5E","foregroundBefore":"0x3E0894",' +
+          '"restoredIconicAtEntry":false,"minimized":true,"alreadyForeground":false,' +
+          '"setForegroundResult":true,"foregroundIsGame":true,"down":1,"up":1}\n',
+      );
+      assert.equal(sent.foregroundBefore, '0x3E0894', 'the displaced window must reach the caller');
+      assert.equal(sent.minimized, true);
+      assert.equal(sent.restoredIconicAtEntry, false);
+
+      // They must survive the failure paths too -- a press that failed after minimizing the game is
+      // exactly when a caller most needs to know the window stack was disturbed.
+      const failed = interpretPressKeyOutput(
+        '{"status":"sent","route":"postMessage","foregroundBefore":"0x3E0894","minimized":true,' +
+          '"restoredIconicAtEntry":true,"foregroundIsGame":false,"postedDown":true,"postedUp":true}\n',
+      );
+      assert.equal(failed.status, 'failed');
+      assert.equal(failed.foregroundBefore, '0x3E0894');
+      assert.equal(failed.minimized, true);
+      assert.equal(failed.restoredIconicAtEntry, true);
+
+      // Absent in, absent out -- never invented. A caller must be able to tell "the script did not
+      // say" from "the script said false".
+      const quiet = interpretPressKeyOutput('{"status":"sent","route":"sendInput","down":1,"up":1}\n');
+      assert.equal('foregroundBefore' in quiet, false);
+      assert.equal('minimized' in quiet, false);
+      assert.equal('restoredIconicAtEntry' in quiet, false);
+    });
+
     await test('every key and route literal this parser reads is one press-title-screen-key.ps1 actually writes', async () => {
       // The cases above feed hand-written JSON, so none of them can notice the .ps1 renaming or
       // dropping a key -- interpretPressKeyOutput tolerates every optional field being absent, so
@@ -257,7 +289,17 @@ async function main() {
 
       // Every field interpretPressKeyOutput/isPressKeyScriptOutput reads, as a hashtable assignment
       // (`name =`) so a mention in a comment cannot satisfy it.
-      for (const key of ['status', 'route', 'foregroundIsGame', 'down', 'up', 'error']) {
+      for (const key of [
+        'status',
+        'route',
+        'foregroundIsGame',
+        'foregroundBefore',
+        'minimized',
+        'restoredIconicAtEntry',
+        'down',
+        'up',
+        'error',
+      ]) {
         assert.match(
           script,
           new RegExp(`^\\s*${key}\\s*=`, 'm'),

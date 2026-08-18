@@ -219,6 +219,11 @@ if (-not $alreadyForeground) {
   $setForegroundResult = [SunriseKeyPress]::SetForegroundWindow($hwnd)
 }
 
+# True when this invocation activated the game window itself -- by the entry self-heal, by the
+# minimize/restore dance, or both -- as opposed to finding it already in front and untouched. This
+# is what the settle below keys on; see the comment there.
+$activatedByThisScript = ($restoredIconicAtEntry -or $minimized)
+
 # Poll rather than sleep a guessed span: activation is asynchronous, and this is the one fact the
 # whole SendInput branch is gated on, so it is read from Windows instead of assumed.
 $foregroundIsGame = $false
@@ -234,7 +239,15 @@ for ($i = 0; $i -lt 8; $i++) {
 # the same window a few seconds later worked immediately. 1200ms is the settle that was measured
 # working across the restore, so it is the number used rather than a rounder guess; then the
 # foreground is read once more, since anything could have taken it back during the wait.
-if (-not $alreadyForeground -and $foregroundIsGame) {
+#
+# Gated on whether THIS script changed the window's activation state, not on $alreadyForeground.
+# The self-heal above is an activation too: measured against the real game, SW_RESTORE on a window
+# a different (already-dead) process had minimized wins the foreground outright, so $alreadyForeground
+# comes back TRUE and the minimize/restore branch never runs. Reading $alreadyForeground alone would
+# therefore skip the settle on exactly the path that just activated the window, leaving only the
+# 300ms above between activation and the keystroke -- a quarter of the settle that was measured to
+# be necessary. It happened to work twice; that is luck, not a margin.
+if ($activatedByThisScript -and $foregroundIsGame) {
   Start-Sleep -Milliseconds 1200
   $foregroundIsGame = ([SunriseKeyPress]::GetForegroundWindow() -eq $hwnd)
 }

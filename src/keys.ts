@@ -184,6 +184,18 @@ export interface PressResult {
   route?: PressRoute;
   /** Whether the game's window actually held the OS foreground at the moment of the press. */
   foregroundIsGame?: boolean;
+  /** The HWND (hex string) that held the OS foreground before this press ran -- i.e. the window
+   *  that was displaced if `minimized` is true. Reported so a caller that disturbed the user's
+   *  window stack can say which window it was, instead of that fact dying in a subprocess's
+   *  stdout. */
+  foregroundBefore?: string;
+  /** Whether this press minimized the game window in order to be allowed to take the foreground.
+   *  True means the window the user was on is now behind the game and was not put back. */
+  minimized?: boolean;
+  /** Whether the game window was found *already* minimized on entry -- the state a previous run
+   *  killed between its own minimize and restore leaves behind -- and was restored before anything
+   *  else. */
+  restoredIconicAtEntry?: boolean;
   down?: number;
   up?: number;
   message: string;
@@ -193,6 +205,9 @@ interface PressKeyScriptOutput {
   status: 'sent' | 'no-game' | 'failed';
   route?: PressRoute;
   foregroundIsGame?: boolean;
+  foregroundBefore?: string;
+  minimized?: boolean;
+  restoredIconicAtEntry?: boolean;
   down?: number;
   up?: number;
   postedDown?: boolean;
@@ -215,10 +230,13 @@ function isPressKeyScriptOutput(value: unknown): value is PressKeyScriptOutput {
   for (const key of ['down', 'up'] as const) {
     if (!isOptionalType(record, key, 'number')) return false;
   }
-  for (const key of ['foregroundIsGame', 'postedDown', 'postedUp'] as const) {
+  for (const key of ['foregroundIsGame', 'minimized', 'restoredIconicAtEntry', 'postedDown', 'postedUp'] as const) {
     if (!isOptionalType(record, key, 'boolean')) return false;
   }
-  return isOptionalType(record, 'error', 'string');
+  for (const key of ['error', 'foregroundBefore'] as const) {
+    if (!isOptionalType(record, key, 'string')) return false;
+  }
+  return true;
 }
 
 /**
@@ -255,12 +273,22 @@ export function interpretPressKeyOutput(stdout: string): PressResult | null {
     return { status: 'no-game', message: 'destiny2.exe is not running.' };
   }
 
+  // What the press did to the window stack, forwarded to the caller on every outcome rather than
+  // left in the subprocess's stdout. An agent that pulled the game in front of whatever the user
+  // was looking at should be able to say so; before this, only the PowerShell knew.
+  const windowState = {
+    ...(parsed.foregroundBefore !== undefined ? { foregroundBefore: parsed.foregroundBefore } : {}),
+    ...(parsed.minimized !== undefined ? { minimized: parsed.minimized } : {}),
+    ...(parsed.restoredIconicAtEntry !== undefined ? { restoredIconicAtEntry: parsed.restoredIconicAtEntry } : {}),
+  };
+
   const route = parsed.route;
 
   if (parsed.status === 'failed') {
     return {
       status: 'failed',
       ...(route !== undefined ? { route } : {}),
+      ...windowState,
       message: parsed.error ?? 'press-title-screen-key.ps1 reported failure without a message.',
     };
   }
@@ -285,6 +313,7 @@ export function interpretPressKeyOutput(stdout: string): PressResult | null {
       status: 'failed',
       route,
       ...(parsed.foregroundIsGame !== undefined ? { foregroundIsGame: parsed.foregroundIsGame } : {}),
+      ...windowState,
       message:
         'The game could not be brought to the foreground, so Enter was posted to its window with ' +
         'PostMessage instead of injected with SendInput. Both posts were accepted, and nothing was ' +
@@ -303,6 +332,7 @@ export function interpretPressKeyOutput(stdout: string): PressResult | null {
     return {
       status: 'failed',
       route: 'sendInput',
+      ...windowState,
       down,
       up,
       message:
@@ -317,6 +347,7 @@ export function interpretPressKeyOutput(stdout: string): PressResult | null {
     // Reported, never assumed: this is the fact the whole no-leak argument rests on, so if the
     // script ever stops saying it, the result says nothing rather than claiming it was confirmed.
     ...(parsed.foregroundIsGame !== undefined ? { foregroundIsGame: parsed.foregroundIsGame } : {}),
+    ...windowState,
     down,
     up,
     message: 'Sent Enter to the game as an OS-level SendInput keystroke, with its window confirmed in the foreground.',
