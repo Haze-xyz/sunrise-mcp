@@ -109,9 +109,23 @@ server.registerTool(
       'Runs one line in the Sunrise in-game console over the loopback endpoint and returns the structured ' +
       'response: status (one of ok, unknownName, wrongArgumentCount, badArgument, outOfRange, refused, failed), ' +
       'a summary string, and rows of key/value pairs. The endpoint answers from the title screen, before the ' +
-      'player presses anything, so this works before any load. Note: this tool has no key-input primitive of its ' +
-      'own, so it cannot by itself get past a "PRESS ENTER TO PLAY" title screen or later loading screens -- use ' +
-      'game_enter for that; console_run\'s own registry is console.*, log.*, movement.*, and player.infinite_ammo. ' +
+      'player presses anything, so this works before any load. The registry is console.*, log.*, movement.*, ' +
+      'player.infinite_ammo, and -- for driving and reverse-engineering the game from here -- input.*, mem.* and ' +
+      'bootflow.character_step. Call console_describe for the authoritative list with help and bounds; what ' +
+      'follows is only what an agent needs before deciding what to try. input.hold <vk> / input.release <vk> / ' +
+      'input.release_all report Windows virtual keys held to the game through the DLL\'s GetKeyState hook, several ' +
+      'at once, and stay held until released -- that is how you drive movement and abilities. They report refused ' +
+      '(changing nothing) while the key hook is not yet attached or the Sunrise in-game interface is open, since ' +
+      'the game is told every key is released in both states; the summary says which. They do NOT get past the ' +
+      'title screen, which precedes the hook -- use game_enter for that. mem.module / mem.read / mem.scan / ' +
+      'mem.scan_data / mem.resolve / mem.write read and search the live game process: signature scans over the ' +
+      'main image (mem.scan for code, mem.scan_data for static data -- neither sweeps the heap), hexdump reads of ' +
+      'any committed readable address including the heap, RIP-relative displacement decoding, and bounded writes. ' +
+      'mem.write refuses code and any image section the PE marks read-only, but that gate describes the game\'s ' +
+      'IMAGE, not its heap: a heap address that is committed, writable and non-executable is accepted, so a bad ' +
+      'address there corrupts live game state rather than being refused. Every write is logged. ' +
+      'bootflow.character_step reads the character sign-in boot step\'s heap address, which is otherwise ' +
+      'unreachable -- feed it to mem.read. It does not exist as an entry (unknownName) until that hook attaches. ' +
       'One line only, at most ~493 bytes once wrapped as {"id":N,"line":"..."} in the 512-byte request envelope; ' +
       'longer lines are rejected locally before anything is sent.',
     inputSchema: {
@@ -211,9 +225,12 @@ server.registerTool(
       'roughly 40s before the title screen can actually accept input, so calling console_run or pressing a key ' +
       'right after game_launch resolves does nothing), brings the game window to the foreground and confirms it ' +
       'got there, presses Enter as an OS-level SendInput keystroke (the one place in this whole project that is ' +
-      'legitimate, because the title screen precedes every key hook the DLL installs, and this engine reads the ' +
-      'keyboard below the window message queue so nothing posted at its window reaches it), then waits for the ' +
-      'log line marking the world finishing loading. The response names the route the press actually took: ' +
+      'legitimate: measured 2026-08-18, the DLL\'s key hook IS attached at the title screen -- console_run ' +
+      '"input.hold 13" answers ok there -- but the title screen does not read it, and five taps plus a ' +
+      'five-second hold moved nothing while SendInput moved it at once on the same launch; this engine also ' +
+      'reads the keyboard below the window message queue, so nothing posted at its window reaches it either), ' +
+      'then waits for the log line marking the world finishing loading. Calls are serialized: two at once cannot ' +
+      'both decide to press. The response names the route the press actually took: ' +
       'sendInput on success, or postMessage -- which is reported as a failure at stage keyPress, since that fallback ' +
       'reaches the window but cannot move an engine that polls GetKeyState. The response also carries a window ' +
       'object saying what the press did to the window stack -- which window it displaced, whether it minimized the ' +

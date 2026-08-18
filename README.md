@@ -54,9 +54,84 @@ Two things worth knowing before you drive this from an agent:
 - **The endpoint answers from the title screen**, before the player presses anything. You do not
   need to wait for a load after `game_launch` resolves — `console_run` and `console_describe` work
   immediately.
-- **`console_run` alone cannot get past the title screen** — its registry (`console.*`, `log.*`,
-  `movement.*`, `player.infinite_ammo`) has no key-input primitive of its own. Use `game_enter` for
-  that; see "Getting past the title screen" below for how it works and why.
+- **The registry is not layer 1's any more.** Alongside `console.*`, `log.*`, `movement.*` and
+  `player.infinite_ammo`, layer 2 publishes forced key input (`input.*`), memory primitives
+  (`mem.*`) and `bootflow.character_step` — the point of layer 2 being that reverse engineering
+  happens under the MCP rather than beside it. `console_describe` is authoritative; the section
+  below is the part that is in no help string and that you need before building on them.
+- **`console_run` alone still cannot get past the title screen.** It *does* have key-input
+  primitives now, and they are attached and answering `ok` at the title screen — but the title
+  screen does not read them. Use `game_enter`; see "Getting past the title screen" below, and the
+  measurement that corrected this README's earlier explanation of why.
+
+## What `console_run` can drive (`input.*`, `mem.*`, `bootflow.character_step`)
+
+`console_describe` returns every entry with its help text and bounds, and is the list to trust.
+What follows is what the help strings have no room for and an operator needs first.
+
+### Forced key input — `input.hold`, `input.release`, `input.release_all`
+
+`input.hold <vk>` reports one Windows virtual-key code held to the game and leaves it held until
+`input.release <vk>` or `input.release_all` takes it back. Several are held at once: the field is
+256 bits, one per virtual-key code, precisely so that a skate can report forward, jump and strike
+together — a single value could only ever answer the last one. This is not an injected keystroke.
+The DLL hooks the `GetKeyState` the engine polls every frame and answers it, so only game code sees
+the held key; the real keyboard is untouched and Dear ImGui still reads it for its own modifiers.
+
+**They report `refused` — changing nothing — in two states**, and the summary names which:
+
+- **The polled guards are not attached.** They install with the graphics hooks, while the console
+  entries register at DLL load, so there is a window in which the entries exist and nothing reads
+  the field they write.
+- **A Sunrise surface has the keyboard.** With the menu or the in-game console open, `get_key_state`
+  answers "released" for every key the game asks about, and it does that before it ever looks at the
+  forced-key field.
+
+Refusing the *releases* as well as the holds is deliberate: it freezes the field in both states — no
+writes in, no writes out — so it can never be changed by a caller who cannot observe the change.
+Retry once the state the summary names has cleared.
+
+### Memory — `mem.module`, `mem.read`, `mem.scan`, `mem.scan_data`, `mem.resolve`, `mem.write`
+
+`mem.module` gives the main image's base and size, without which an absolute address means nothing
+from one launch to the next. `mem.read` dumps up to 256 bytes as hexdump rows keyed by address.
+`mem.resolve` decodes a RIP-relative displacement into the address it names. `mem.scan` and
+`mem.scan_data` search for a signature. `mem.write` stores up to a small, bounded run of bytes.
+Three properties of that set are worth knowing before you build on it, and none of them fits in a
+help string.
+
+**The write gate protects the game's image, not the game's state.** `mem.write` refuses code, and
+refuses any section the PE's own section table marks read-only — `.rdata`, `.pdata`, `.rsrc` and the
+rest, which hold const vtables, the import address table and unwind info. That is a gate on the
+*image*. Outside the image there is no section table, so the gate is the page protection alone: a
+heap address that is committed, writable and non-executable clears it and is written. This is the
+correct design — the heap is where the interesting writes are, and an image-only primitive could not
+change a live object at all — but the consequence has to be said plainly: **a wrong address on the
+heap corrupts live game state rather than being refused.** A refusal you got back from a bad address
+inside the image is not evidence that the gate would catch a bad address outside it; nothing catches
+that one. Every call is logged with its address and its bytes, refused calls included, which is the
+only record you will have when the symptom surfaces somewhere else entirely.
+
+**The scans sweep ungated, on purpose.** `mem.read` and `mem.write` check every byte against the
+region Windows says it lives in; the two scans do not. That is deliberate rather than an omission: a
+sweep that skipped whatever it could not prove readable would answer "no match" for a signature that
+is present, which is worse than a refusal because it looks like an answer. The sweep is bounded by
+the image's own section table instead.
+
+**Neither scan reaches the heap, and `mem.scan_data` is static data only.** `mem.scan` covers the
+main image's executable sections; `mem.scan_data` covers its readable non-executable ones. A live
+object is therefore not findable by scanning for it — you need a global that points at it, or a hook
+that hands you its address. A `matches: 0` result says so in its own summary, because that is the
+most decision-changing fact about a miss.
+
+### `bootflow.character_step`
+
+A read-only integer variable carrying the base address of the character sign-in boot step — a hook
+handing you an address, which is the second of the two routes to a live object above. The step is
+heap-allocated, its address changes every launch, and nothing else in the process can produce one:
+the character-select hook is given one live instance per boot and latches it. Feed the value to
+`mem.read`. It reads zero until the step has been entered once, and **before that hook attaches the
+entry does not exist at all**, so a call then comes back `unknownName` rather than zero.
 
 ## Getting past the title screen (`game_enter`)
 
@@ -64,9 +139,11 @@ Two things worth knowing before you drive this from an agent:
 left: the console endpoint answers from the title screen, but nothing could get *past* it. A probe
 run against the real game on 2026-08-18 measured two things that shape everything below:
 
-- **The DLL's key hook does not reach the title screen.** Holding VK_RETURN through the hook for
-  three seconds moved nothing. An OS-level keystroke injected below the game entirely is the only
-  door open there.
+- **Holding VK_RETURN through the DLL's key hook does not move the title screen.** Three seconds of
+  it did nothing. An OS-level keystroke injected below the game entirely is the only door open
+  there. (That probe recorded this as "the hook does not *reach* the title screen". It was never
+  measured, and it is wrong — see "The hook is there; the title screen just does not read it"
+  below. The behaviour above held up; the explanation did not.)
 - **`game_launch` resolving is not a readiness signal.** It only waits for the game's window to
   exist, which the probe measured happening roughly 40s before the title screen can actually accept
   input — a keystroke sent right after `game_launch` returns is lost. The signal that actually works
@@ -110,10 +187,13 @@ attributed API did not. The name matters: the follow-on route — Sunrise's own 
 polled `GetKeyState` in-process — is discoverable from `GetKeyState` and invisible from Raw Input.)
 
 **Scope of "the foreground is required".** It is required *from outside the process, via `SendInput`
-or `PostMessage`* — the two doors the MCP has. It is not a closed problem in general. Two others meet
-the no-foreground condition and belong to later tasks: hooking the very `GetKeyState` the engine
+or `PostMessage`* — the two doors the MCP has. It is not a closed problem in general. Two others met
+the no-foreground condition and were left to later tasks: hooking the very `GetKeyState` the engine
 polls, **in-process** (that is Sunrise's existing forced-key hook), and a separate desktop via
-`CreateDesktop`/`SetThreadDesktop`, which has its own foreground that never touches the user's screen.
+`CreateDesktop`/`SetThreadDesktop`, which has its own foreground that never touches the user's
+screen. The first of those has since been built, shipped as `input.*`, and **measured not to move
+this screen** — see below. It drives the game perfectly well once past it. The separate desktop is
+untried.
 
 **So `SendInput` is the primary route and `PostMessage` the fallback, and the result names which one
 ran** (`PressResult.route`, surfaced by `game_enter` as `route`). **`postMessage` always comes back
@@ -188,8 +268,41 @@ this pid was already pressed (see the repeat-call finding below). The way out is
 `game_enter`, which clears the record; the failure message says so.
 
 **`SendInput` is still used nowhere else in this project, and should not be.** Using it here is a
-deliberate, narrow exception: the title screen precedes every hook this project installs, so it is
-the *only* screen with no other way in.
+deliberate, narrow exception: it is the only route measured to move this screen. Not, as this
+section used to claim, because the title screen precedes every hook the DLL installs — see below.
+
+### The hook is there; the title screen just does not read it
+
+Measured 2026-08-18, at the end of the layer-2 fix wave, because nobody had ever measured the
+premise the exception rests on. The polled guards attach with the graphics hooks, and the game
+presents frames at the title screen, so there was every reason to think the hook was live there.
+
+It is. At the title screen, `console_run "input.hold 13"` answers **`ok`** — which, since that same
+fix wave, means the guards reported themselves attached and no Sunrise surface had the keyboard. The
+hook is installed, the forced-key field is live, and the console can write it, all before Enter has
+ever been pressed. `bootflow.character_step` answers there too. The old claim that the title screen
+"precedes every key hook the DLL installs" is simply false.
+
+What the title screen does not do is read it. On one launch, in this order: five hold/release taps
+of VK_RETURN through the hook — nothing; one continuous five-second hold — nothing; then
+`SendInput`, on the same launch and the same title screen, which produced
+`Leaving state 'bootflow:start'` at once and a loaded world after it. The log did not grow by a
+single byte across the whole hook phase. So the game was not wedged and the measurement is not an
+artifact of a dead title screen: the screen was capable of moving the entire time and the hook did
+not move it.
+
+Why is not established, and this README is not going to invent a third confident guess about this
+engine. The plausible candidates, in the order worth testing: the title screen polls
+`GetAsyncKeyState` rather than `GetKeyState`, and the DLL's async guard only ever forces keys
+*released* — it has no path that reports one held; or it reads through some route neither export
+covers; or it wants an edge the per-frame scan cannot see from a state bit. What **is** established
+is the operational fact: `input.*` is for driving the game once it is in, and `game_enter` is for
+getting it in.
+
+Nothing in `game_enter` changes on the strength of this. Had the hook moved the screen, `game_enter`
+could have dropped the foreground theft, the window disturbance, the settle, the self-heal and the
+whole press-record apparatus — that is a design change for a rested author, not a fix, and in any
+case the measurement points the other way.
 
 `game_enter` composes this into one tool: launch if the game isn't already running (checked via
 `tasklist`, so a game already sitting past the title screen isn't needlessly killed and restarted),
@@ -288,6 +401,20 @@ the restart case, the cache still carries the same-process case, and neither dep
 succeeding. Both are gated by the identical `isPressRecordFresh` pid+log-size check, and both are
 cleared together the moment the game is observed not running, so the two sources can never disagree
 in a way that resurrects a record for a game session it doesn't actually belong to.
+
+**Every one of those fixes is a read-then-act sequence, and none of them was atomic.** A fifth round
+found the last open path to a spurious press, and it is not in any of the checks above but in the way
+they are reached: nothing in MCP stops a client dispatching two `game_enter` calls at once. Both
+would observe "not pressed for this pid" before either wrote the record — the cache included, since
+it is only written after the press — and both would fire `SendInput`. Until this was closed, the
+safety claim was quietly conditional on the client never parallelising, which this repo does not
+control and never stated. `src/serialize.ts` closes it: `createSerializer` returns a one-at-a-time
+queue, and `game_enter`'s whole handler runs inside it. Serializing the whole call rather than
+locking around the record is deliberate — the press also takes the OS foreground, minimizes and
+restores a window, and settles for over a second, and two of those interleaved would fight each other
+even with a perfectly guarded record. A rejected call resolves to its own caller without poisoning
+the queue. The scope is one process, which is exactly the scope of the in-process cache it protects;
+the durable record already covers the restart case.
 
 The `INPUT` struct `press-title-screen-key.ps1` passes to `SendInput` is 40 bytes on x64. A
 declaration missing the two trailing `int` padding fields comes out 32 bytes, and `SendInput` then
@@ -634,8 +761,11 @@ foreground is not optional for this engine — see "What the 2026-08-18 re-measu
   `decideGameEnterAction`'s `pressedThisSession` input. The file survives an MCP server restart; the
   cache survives the file's own write silently failing within one process's lifetime. See "Getting
   past the title screen" above.
+- `src/serialize.ts` — `createSerializer`, the one-at-a-time call queue `game_enter` runs inside so
+  two concurrent invocations cannot both observe "not pressed yet" and both press. Pure, no imports,
+  tested by table in `scripts/game-enter-decision-smoke.mjs`.
 - `src/index.ts` — the MCP server: six tools over stdio, wiring `endpoint.ts`, `game.ts`, `keys.ts`,
-  `tasklist.ts`, `game-enter-decision.ts`, and `press-record.ts` together.
+  `tasklist.ts`, `game-enter-decision.ts`, `press-record.ts` and `serialize.ts` together.
 - `scripts/launch-game.ps1` — launch + window-wait, adapted from
   `a local capture script` (same kill-existing /
   `Start-Process -PassThru` / poll-`MainWindowHandle` shape; the capture/dump/close steps that
