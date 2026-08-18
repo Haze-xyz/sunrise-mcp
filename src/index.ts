@@ -15,7 +15,14 @@ import { z } from 'zod';
 
 import { SunriseEndpointClient, type DescribeResponse, type RunResponse } from './endpoint.js';
 import { DEFAULT_LOG_LINES, MAX_LOG_LINES, getExePath, getLogPath, killGame, launchGame, readLog } from './game.js';
-import { TITLE_SCREEN_MARKER, WORLD_LOADED_MARKER, pressTitleScreenKey, waitForLogMarker, waitForTitleScreen } from './keys.js';
+import {
+  TITLE_SCREEN_MARKER,
+  WORLD_LOADED_MARKER,
+  currentLogSize,
+  pressTitleScreenKey,
+  waitForLogMarker,
+  waitForTitleScreen,
+} from './keys.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -177,16 +184,18 @@ server.registerTool(
   'game_enter',
   {
     description:
-      'Gets the game from wherever it is (not running, or sitting at the title screen) to the character-selection ' +
-      'screen: launches destiny2.exe if it is not already running, waits for sunrise.log\'s ' +
+      'Gets the game from wherever it is (not running, sitting at the title screen, or already past it) to the ' +
+      'character-selection screen: launches destiny2.exe if it is not already running, waits for sunrise.log\'s ' +
       `"${TITLE_SCREEN_MARKER}" line (the earliest reliable readiness signal -- game_launch itself returns ` +
       'roughly 40s before the title screen can actually accept input, so calling console_run or pressing a key ' +
       'right after game_launch resolves does nothing), presses Enter as an OS-level SendInput keystroke (the ' +
       'one place in this whole project that is legitimate, because the title screen precedes every key hook the ' +
-      'DLL installs), then waits for the log line marking the world finishing loading. Leaves the game at the ' +
-      'character-selection screen for now -- choosing a character is a separate tool not yet built. On failure, ' +
-      'the response names which stage it stopped at (launch, titleScreen, keyPress, or worldLoad) so a caller ' +
-      'knows what actually went wrong rather than just that something did.',
+      'DLL installs), then waits for the log line marking the world finishing loading. If the game is already ' +
+      'running and has already loaded a world in this session, this is a safe no-op that reports ok without ' +
+      'pressing anything again -- safe to call repeatedly, e.g. as a precondition before other tools. Leaves the ' +
+      'game at the character-selection screen for now -- choosing a character is a separate tool not yet built. ' +
+      'On failure, the response names which stage it stopped at (launch, titleScreen, keyPress, or worldLoad) so ' +
+      'a caller knows what actually went wrong rather than just that something did.',
   },
   async (): Promise<CallToolResult> => {
     // Which stage failed is the whole point of this tool's error reporting (see its description),
@@ -202,23 +211,59 @@ server.registerTool(
     let stage = 'launch';
     try {
       const running = await isGameRunning();
+      // Whole-file offset (0): nothing could be stale yet on this path, since a fresh launch's own
+      // wait is anchored below instead, and the not-yet-past-title-screen path (see the else branch)
+      // hasn't completed a pass in this log at all.
+      let titleWaitOffset = 0;
+
       if (!running) {
         const launch = await launchGame();
         if (launch.status !== 'launched') return fail(stage, launch.message);
+        // launchGame() kills any existing process and starts a new one, but reuses the same
+        // sunrise.log path. If the engine doesn't truncate that file on a fresh start, whatever the
+        // previous process already wrote (including a stale TITLE_SCREEN_MARKER or even
+        // WORLD_LOADED_MARKER) is still sitting in it. Anchoring to the log's size right after this
+        // launch means only a marker THIS new process actually writes can satisfy the wait below.
+        titleWaitOffset = await currentLogSize(getLogPath());
+      } else {
+        // The game was already running, so no launch (and no fresh-launch offset) happened above.
+        // sunrise.log is append-only: once a marker is written it stays for the rest of that
+        // process's life, so a whole-file check can't tell "just reached this state" from "reached
+        // it once, a while ago, and hasn't moved since". WORLD_LOADED_MARKER only ever appears after
+        // a press has already worked, so if it's anywhere in the log, a full pass already happened
+        // in this session -- a repeat call must not press Enter again into whatever the game is
+        // showing now (menu, character select, mid-gameplay) or claim a fresh 'ok' for work it
+        // didn't do. waitForLogMarker(..., 0) with timeoutMs 0 is a single immediate check, not a
+        // wait: the deadline is already now, so the loop below checks once and returns.
+        const alreadyPastTitleScreen = await waitForLogMarker(WORLD_LOADED_MARKER, 0, getLogPath());
+        if (alreadyPastTitleScreen) {
+          return textResult({
+            status: 'ok',
+            message: 'The game was already past the title screen with a world loaded; nothing to press.',
+          });
+        }
+        // Falls through with titleWaitOffset still 0 (whole-file): WORLD_LOADED_MARKER's absence
+        // just proved no full pass has completed in this log yet, so an existing TITLE_SCREEN_MARKER
+        // here is legitimate current evidence, not stale leftovers -- e.g. the game was started by a
+        // direct game_launch call and is genuinely still sitting at the title screen, unpressed.
       }
 
       stage = 'titleScreen';
-      const sawTitleScreen = await waitForTitleScreen();
+      const sawTitleScreen = await waitForTitleScreen(undefined, getLogPath(), titleWaitOffset);
       if (!sawTitleScreen) {
         return fail(stage, `Timed out waiting for "${TITLE_SCREEN_MARKER}" in sunrise.log. The game may still be booting.`);
       }
 
       stage = 'keyPress';
+      // Anchor the world-load wait to right before the press: this is what proves the marker found
+      // below was produced by THIS press, not a stale one already sitting in the log -- the same
+      // finding this whole block guards against, applied to the second marker.
+      const preKeyPressOffset = await currentLogSize(getLogPath());
       const press = await pressTitleScreenKey();
       if (press.status !== 'sent') return fail(stage, press.message);
 
       stage = 'worldLoad';
-      const enteredWorld = await waitForLogMarker(WORLD_LOADED_MARKER, WORLD_LOAD_TIMEOUT_MS);
+      const enteredWorld = await waitForLogMarker(WORLD_LOADED_MARKER, WORLD_LOAD_TIMEOUT_MS, getLogPath(), preKeyPressOffset);
       if (!enteredWorld) {
         return fail(stage, `Timed out waiting for "${WORLD_LOADED_MARKER}" in sunrise.log after pressing Enter.`);
       }

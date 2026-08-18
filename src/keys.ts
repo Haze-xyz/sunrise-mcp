@@ -21,7 +21,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -44,16 +44,38 @@ const DEFAULT_TITLE_SCREEN_TIMEOUT_MS = 30_000;
 // rounded up to this interval.
 const LOG_POLL_INTERVAL_MS = 500;
 
-async function logContainsMarker(logPath: string, marker: string): Promise<boolean> {
+/**
+ * The byte size of `logPath` right now, or 0 if it doesn't exist yet. Lets a caller anchor
+ * `waitForLogMarker`'s `sinceOffset` to "right now", so it can demand genuinely new evidence rather
+ * than matching whatever the log already happened to contain -- see `waitForLogMarker`'s doc
+ * comment for why that distinction matters.
+ */
+export async function currentLogSize(logPath: string = getLogPath()): Promise<number> {
   try {
-    const content = await readFile(logPath, 'utf8');
-    return content.includes(marker);
+    const { size } = await stat(logPath);
+    return size;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw err;
+  }
+}
+
+async function logHasMarkerSince(logPath: string, marker: string, sinceOffset: number): Promise<boolean> {
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(logPath);
   } catch (err) {
     // ENOENT means sunrise.log hasn't been created yet (e.g. called right after launch, before the
     // game has written anything) -- that is "marker not seen yet", not an error worth throwing.
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw err;
   }
+  // If the file is now smaller than the offset we started from, it was truncated or recreated
+  // (e.g. log rotation) since sinceOffset was captured -- that offset no longer means anything
+  // against this file, so treat the whole (now-smaller) file as new rather than reporting a
+  // permanent false negative for the rest of this process's life.
+  const effectiveOffset = buffer.length < sinceOffset ? 0 : sinceOffset;
+  return buffer.subarray(effectiveOffset).toString('utf8').includes(marker);
 }
 
 /**
@@ -62,11 +84,30 @@ async function logContainsMarker(logPath: string, marker: string): Promise<boole
  * actually watching for the marker: each iteration re-reads the file and re-checks the deadline, so
  * the wait ends as soon as the marker shows up rather than riding out a guessed duration, and it
  * never sleeps longer than the time remaining before the deadline.
+ *
+ * `sinceOffset` (bytes, default 0 -- the whole file) restricts a match to content at or after that
+ * point in the file. This matters because sunrise.log is append-only: once a marker has been
+ * written, it stays in the file for the rest of that process's life, so a whole-file check can't
+ * tell "the game just reached this state" from "the game reached this state at some point in the
+ * past and hasn't moved since". A caller that needs genuinely *new* evidence -- e.g. game_enter in
+ * index.ts, right after a fresh launch, to avoid matching a not-yet-truncated previous session's
+ * leftover marker, or right after pressing a key, to confirm that specific press actually did
+ * something -- passes the log's size at that point as `sinceOffset`. Passing 0 (the default) keeps
+ * the original whole-file behavior, which is still correct when nothing could be stale: nothing has
+ * written a competing marker yet, so anything in the file is legitimate current evidence.
+ *
+ * With `timeoutMs` 0, this is a single immediate check: the deadline is already `Date.now()`, so the
+ * loop checks once and returns without ever sleeping.
  */
-export async function waitForLogMarker(marker: string, timeoutMs: number, logPath: string = getLogPath()): Promise<boolean> {
+export async function waitForLogMarker(
+  marker: string,
+  timeoutMs: number,
+  logPath: string = getLogPath(),
+  sinceOffset = 0,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    if (await logContainsMarker(logPath, marker)) return true;
+    if (await logHasMarkerSince(logPath, marker, sinceOffset)) return true;
     const remaining = deadline - Date.now();
     if (remaining <= 0) return false;
     await sleep(Math.min(LOG_POLL_INTERVAL_MS, remaining));
@@ -83,12 +124,16 @@ export async function waitForLogMarker(marker: string, timeoutMs: number, logPat
  * this at a temp file it writes incrementally instead: `getLogPath()` builds its path with
  * `path.win32`, which mangles a Linux-style temp path's separators, so a WSL-node test cannot reach
  * a real temp file through `SUNRISE_GAME_DIR` alone.
+ *
+ * `sinceOffset` is forwarded to `waitForLogMarker` -- see its doc comment for why a caller might
+ * need to restrict the match to content appended after a specific point rather than the whole file.
  */
 export async function waitForTitleScreen(
   timeoutMs: number = DEFAULT_TITLE_SCREEN_TIMEOUT_MS,
   logPath: string = getLogPath(),
+  sinceOffset = 0,
 ): Promise<boolean> {
-  return waitForLogMarker(TITLE_SCREEN_MARKER, timeoutMs, logPath);
+  return waitForLogMarker(TITLE_SCREEN_MARKER, timeoutMs, logPath, sinceOffset);
 }
 
 export interface PressResult {

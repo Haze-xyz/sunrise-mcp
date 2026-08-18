@@ -88,6 +88,36 @@ screen** — choosing a character is a separate tool, not yet built. On failure 
 it stopped at (`launch`, `titleScreen`, `keyPress`, or `worldLoad`), since that's what a calling
 agent needs to know to react sensibly rather than just that something went wrong.
 
+**`game_enter` is safe to call repeatedly against an already-running game.** `sunrise.log` is
+append-only, so once `TITLE_SCREEN_MARKER`/`WORLD_LOADED_MARKER` have been written, they stay in the
+file for the rest of that process's life — a naive whole-file check can't tell "the game just reached
+this state" from "it reached this state once, a while ago, and hasn't moved since". A repeat call
+that skipped launch (the game was already running) and then went on to whole-file-match a stale
+marker would press `SendInput` Enter into whatever the game is currently showing — a menu, character
+select, mid-gameplay — and report a false `ok`, as if it had just freshly gotten the game past the
+title screen. This was an Important finding from Task 3's review, confirmed real and not
+hypothetical: it only needs the ordinary property that a single process's log file doesn't rewind.
+
+Two things close it, and both are needed — see `waitForLogMarker`'s doc comment in `src/keys.ts` for
+the mechanism (`sinceOffset`) they share. First, `game_enter` checks up front whether
+`WORLD_LOADED_MARKER` is already anywhere in the log before doing anything else; if so, a full pass
+already completed in this session, and it returns `ok` immediately without pressing anything —
+that's what actually stops the spurious keystroke on a same-session repeat call, since it never
+reaches the point where a press could happen. Second, every wait that follows is anchored to a byte
+offset captured at the right moment rather than checking the whole file: the title-screen wait after
+a fresh launch is anchored to the log's size right after that launch (closing a related, weaker risk
+— `launchGame()` reuses the same log path across a kill+restart, so if the engine doesn't truncate
+it, stale markers from the killed process would otherwise look like fresh evidence too), and the
+world-load wait is anchored to the log's size right before the press, so the marker that satisfies it
+must have been produced by *that* press. The up-front short-circuit alone would not close the
+relaunch case (a fresh launch never takes that branch, since the game wasn't running to begin with);
+the offset anchor alone would not preserve the legitimate case of a game left sitting at the title
+screen by a direct `game_launch` call, unpressed, before `game_enter` is ever called — in that case
+`WORLD_LOADED_MARKER` is genuinely absent, so the short-circuit correctly does not trigger, and the
+existing (unanchored, whole-file) `TITLE_SCREEN_MARKER` there is legitimate current evidence, not a
+stale leftover. Both mechanisms together are what make `game_enter` idempotent without either firing
+a spurious keystroke or refusing to press a game that is honestly still waiting at the title screen.
+
 The `INPUT` struct `press-title-screen-key.ps1` passes to `SendInput` is 40 bytes on x64. A
 declaration missing the two trailing `int` padding fields comes out 32 bytes, and `SendInput` then
 silently returns `0` — no exception, no `GetLastError` anyone sees — instead of throwing; this cost
@@ -172,13 +202,22 @@ npm run test:keys   # builds, then runs scripts/keys-smoke.mjs
 It covers: `false` before the marker line is present and the timeout is hit; `true` once the marker
 is appended to the file mid-wait, returned promptly rather than riding out the full timeout; the
 timeout being respected — not rounded up to the poll interval — when it's shorter than a single
-poll; and the log file simply not existing yet (e.g. called right after launch, before the game has
-written anything).
+poll; the log file simply not existing yet (e.g. called right after launch, before the game has
+written anything); `currentLogSize`'s contract (0 for a missing file, the real byte size for an
+existing one); `timeoutMs` 0 acting as a single immediate check in both directions, which is the
+building block `game_enter`'s already-past-the-title-screen short-circuit relies on; and — added for
+the repeat-call idempotency finding described above — that `sinceOffset` makes the wait ignore a
+marker already in the file before that offset was captured, matching only content appended after it.
 
-This test was deliberately broken to confirm it can actually fail: with the poll loop temporarily
-replaced by a single immediate check (i.e. the wait removed), the "marker appended mid-wait" case
-failed as expected (`3/4 passed`, exit code 1) while the other three still passed, then all four
-passed again once the loop was restored. See `task-3-report.md` for the pasted output of both runs.
+Both rounds of this test were deliberately broken to confirm they can actually fail. First round:
+with the poll loop temporarily replaced by a single immediate check (i.e. the wait removed), the
+"marker appended mid-wait" case failed as expected (`3/4 passed`, exit code 1) while the other three
+still passed, then all four passed again once the loop was restored. Second round (the
+`sinceOffset` fix): with the offset ignored (`logHasMarkerSince` matching the whole file regardless
+of `sinceOffset`, i.e. the original pre-fix behavior), the new "ignores a marker already in the log
+before sinceOffset" case failed as expected (`6/7 passed`, exit code 1) while the other six still
+passed, then all seven passed again once restored. See `task-3-report.md` for the pasted output of
+both rounds.
 
 `pressTitleScreenKey()` shells out to a real `destiny2.exe` process check and, with the game
 running, a real `SendInput` call — neither of which this repo fakes. Its `no-game` branch (the game
