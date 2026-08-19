@@ -37,6 +37,8 @@ import {
   parseRoster,
   parseSelectAnswer,
   rosterIsReady,
+  rosterWaitFailure,
+  shouldKeepPollingRoster,
   type GameEnterEntry,
   type HoldSettingResult,
   type ResolvedCharacterRequest,
@@ -144,6 +146,11 @@ const CHARACTER_ENDPOINT_TIMEOUT_MS = 90_000;
 /** Gap between roster attempts while the endpoint is not up yet. */
 const CHARACTER_ENDPOINT_POLL_MS = 500;
 
+/** How long a game that answers character.list but not with a loaded roster is given to become
+ *  ready. The window that makes this non-zero is ~50ms wide (the endpoint binds at t=125ms, the
+ *  account is authored at t=172ms); everything else that produces such an answer is permanent. */
+const CHARACTER_READINESS_GRACE_MS = 5_000;
+
 /** How long to wait for CHARACTER_ENTERED_MARKER after a press this call made. Measured 4s after the
  *  world-load marker on the 2026-08-19 run; a client that has not left the character step within this
  *  has parked on it, which is what the failure at this stage says. */
@@ -193,42 +200,40 @@ async function readRosterOnce(): Promise<RosterAttempt> {
  * arrives about a second before the deadline for a pick (see character.ts), while the endpoint
  * answers about seven seconds before the marker itself.
  *
- * **Readiness, not reachability.** An earlier version retried only on a thrown error, i.e. only
- * while the socket itself could not be reached, and took the first answer it got as final. The
- * endpoint binds very early in the boot -- `console_endpoint stage=listen` is at t=125ms -- and
- * nothing says the account roster is loaded, or that the `character.*` entries have registered, by
- * the time it will accept a connection. A `refused` with an empty roster, or an `unknownName` from
- * the window before those entries register, would have failed the whole call on a game that was
- * merely a few hundred milliseconds early. Every not-ok answer is retried on the same schedule as an
- * unreachable socket, and the last one seen is what the timeout reports, so a genuinely old DLL
- * still ends up saying exactly what is wrong with it rather than being hidden behind a generic
- * timeout.
+ * **Readiness, not reachability -- but not two separate forevers either.** An earlier version
+ * retried only on a thrown error and took the first answer it got as final, which failed the whole
+ * call on a game a few hundred milliseconds early. The version after it retried everything for the
+ * full ninety seconds, which made an account with no characters, and a DLL too old to have the
+ * entry, each cost ninety seconds to report. The two budgets here are `shouldKeepPollingRoster`'s:
+ * an endpoint that has never answered gets the whole timeout, and one that answers something
+ * useless gets a short grace and then is believed.
  *
- * @param timeoutMs How long to keep trying.
+ * @param timeoutMs How long to keep trying while nothing answers at all.
  * @returns The roster, or the reason it could not be read.
  */
 async function waitForRoster(timeoutMs: number): Promise<RosterAttempt> {
   const deadline = Date.now() + timeoutMs;
   let lastReason = 'the endpoint was never reached';
+  let firstAnswerAt: number | null = null;
   for (;;) {
     try {
       const attempt = await readRosterOnce();
-      // A roster with no characters is a roster that has not been built yet: the account is
-      // authored from settings during startup, so an empty one this early says "not ready", not
-      // "this account owns nobody". The console's own refusal for a genuinely empty account is what
-      // the timeout below ends up reporting.
+      firstAnswerAt ??= Date.now();
       if (attempt.ok && rosterIsReady(attempt.roster)) return attempt;
       lastReason = attempt.ok ? 'character.list answered ok with an empty roster' : attempt.message;
     } catch (err) {
       lastReason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     }
-    if (Date.now() >= deadline) {
+    const keepGoing = shouldKeepPollingRoster({
+      everAnswered: firstAnswerAt !== null,
+      msSinceFirstAnswer: firstAnswerAt === null ? 0 : Date.now() - firstAnswerAt,
+      graceMs: CHARACTER_READINESS_GRACE_MS,
+      deadlineExpired: Date.now() >= deadline,
+    });
+    if (!keepGoing) {
       return {
         ok: false,
-        message:
-          `The game's console endpoint did not answer character.list with a loaded roster within ` +
-          `${timeoutMs}ms, so no character could be chosen (last answer: ${lastReason}). The game may ` +
-          'have failed to load the Sunrise DLL; check log_read.',
+        message: rosterWaitFailure(firstAnswerAt !== null, lastReason, timeoutMs, CHARACTER_READINESS_GRACE_MS),
       };
     }
     await sleep(Math.min(CHARACTER_ENDPOINT_POLL_MS, Math.max(deadline - Date.now(), 0)));
@@ -341,6 +346,7 @@ async function verifyCharacterEntered(
     before: first.roster,
     after: second.roster,
     entered,
+    waitedMs: timeoutMs,
     ...(second.reason !== undefined ? { unreadableReason: second.reason } : {}),
   });
 
@@ -749,8 +755,17 @@ server.registerTool(
         // than cast so the compiler keeps checking it if that ever stops being true.
         const entry: GameEnterEntry = decision.kind === 'launch' ? 'launch' : 'proceed';
         const step = decideCharacterStep({ entry, signInStarted });
-        if (step.kind === 'refuseLatePick') {
-          return fail(stage, step.reason, {
+        if (step.kind !== 'pick') {
+          // Fails closed rather than branching only on the refusal it expects: `verifyOnly` cannot
+          // reach this site today (its two entries return above) and the type says so, but the cost
+          // of being wrong here is issuing the exact pick this gate exists to prevent, so anything
+          // that is not an explicit 'pick' stops.
+          const reason =
+            step.kind === 'refuseLatePick'
+              ? step.reason
+              : `The character step resolved to "${step.kind}" where only a pick can be issued, so nothing ` +
+                'was picked and Enter was not pressed. This is a bug in game_enter, not a state of the game.';
+          return fail(stage, reason, {
             character: characterReport(request, null, rosterBefore.roster),
             ...settingsReport(),
           });

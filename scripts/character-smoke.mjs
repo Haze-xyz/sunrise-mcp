@@ -56,6 +56,8 @@ import {
   parseSelectAnswer,
   rewriteHoldCharacterSelect,
   rosterIsReady,
+  rosterWaitFailure,
+  shouldKeepPollingRoster,
 } from '../dist/character.js';
 import { waitForLogMarker } from '../dist/keys.js';
 import { decideKillOutcome, waitForGameToExit } from '../dist/game.js';
@@ -419,6 +421,43 @@ async function main() {
       assert.equal(rosterIsReady(empty), false, 'an empty roster must keep the poll going, not end it');
     });
 
+    await test('a permanent not-ready answer costs a short grace, not the whole endpoint timeout', () => {
+      // Nothing answering is the ordinary shape of a boot and deserves the full budget. Answering
+      // with something useless is nearly always permanent -- character.list refuses outright for an
+      // account owning no characters, and unknownName from an old DLL never becomes ready -- and
+      // re-asking those for ninety seconds is the already-decided-question defect on another path.
+      assert.equal(
+        shouldKeepPollingRoster({ everAnswered: false, msSinceFirstAnswer: 0, graceMs: 5000, deadlineExpired: false }),
+        true,
+        'an endpoint that has never answered gets the whole timeout',
+      );
+      assert.equal(
+        shouldKeepPollingRoster({ everAnswered: true, msSinceFirstAnswer: 100, graceMs: 5000, deadlineExpired: false }),
+        true,
+        'and one that just answered gets the grace, because a ~50ms window really does exist',
+      );
+      assert.equal(
+        shouldKeepPollingRoster({ everAnswered: true, msSinceFirstAnswer: 6000, graceMs: 5000, deadlineExpired: false }),
+        false,
+        'but past the grace it must be believed rather than re-asked for the full timeout',
+      );
+      assert.equal(
+        shouldKeepPollingRoster({ everAnswered: false, msSinceFirstAnswer: 0, graceMs: 5000, deadlineExpired: true }),
+        false,
+      );
+
+      // The two endings are different problems, and the advice must not be swapped.
+      const silent = rosterWaitFailure(false, 'ECONNREFUSED', 90000, 5000);
+      assert.match(silent, /check log_read/, 'nothing answering really can be a DLL that failed to load');
+      const useless = rosterWaitFailure(true, 'character.list answered unknownName: ', 90000, 5000);
+      assert.doesNotMatch(
+        useless,
+        /check log_read/,
+        'a game that answered the console is not a game whose DLL failed to load; that advice must not follow it',
+      );
+      assert.match(useless, /predates the character console/);
+    });
+
     await test('decideCharacterStep: the pick is only issued when sign-in provably has not started', () => {
       // The case that was wrong: `proceed` is reached whenever the game runs, the world marker is
       // absent, the pid is known and THIS server has no press record -- which is also exactly what a
@@ -442,12 +481,40 @@ async function main() {
           `entry=${row.entry} signInStarted=${row.signInStarted} should be ${row.kind}, got ${step.kind}`,
         );
       }
-      // The refusal has to tell an agent what happened and what to do, and say that nothing moved.
-      const refused = decideCharacterStep({ entry: 'proceed', signInStarted: true });
-      assert.ok(refused.reason.includes(SIGN_IN_MARKER), 'the refusal must quote the marker it read');
-      assert.match(refused.reason, /game_kill/);
-      assert.match(refused.reason, /nothing was changed/i);
-      assert.match(refused.reason, /Enter was not pressed/i);
+      // The refusal has to tell an agent what happened and what to do -- and it has to stop saying it
+      // on the branch where it is false. Reaching this on `launch` means launchGame() has ALREADY
+      // force-stopped any running instance and started a new one, and may already have rewritten
+      // settings.json and left a backup; the same response carries that settings object, so a
+      // blanket "nothing was changed" would contradict its own payload inside one JSON object.
+      for (const entry of ['proceed', 'launch']) {
+        const refused = decideCharacterStep({ entry, signInStarted: true });
+        assert.ok(refused.reason.includes(SIGN_IN_MARKER), `${entry}: the refusal must quote the marker it read`);
+        assert.match(refused.reason, /game_kill/, `${entry}: it must say what to do next`);
+        assert.match(refused.reason, /pressed nothing/i, `${entry}: it must say no keystroke was sent`);
+        assert.doesNotMatch(
+          refused.reason,
+          /nothing was changed/i,
+          `${entry}: an unqualified "nothing was changed" is false on launch and must not be shipped on either`,
+        );
+      }
+
+      const onLaunch = decideCharacterStep({ entry: 'launch', signInStarted: true });
+      assert.match(onLaunch.reason, /restarted the game/i, 'launch must own the restart it already performed');
+      assert.match(onLaunch.reason, /settings/i, 'launch must point at the settings object it may ship beside this');
+
+      // An adversarial read of the first draft caught this one: it asserted "Something pressed Enter
+      // on the new instance", which is a cause nobody observed. What the marker shows is that the
+      // boot got past the title screen; by what means is an inference, and the round-1 report already
+      // paid for one confident inference about this screen.
+      assert.doesNotMatch(
+        onLaunch.reason,
+        /something pressed enter/i,
+        'the refusal must not assert a cause it did not observe, only what the log shows',
+      );
+
+      const onProceed = decideCharacterStep({ entry: 'proceed', signInStarted: true });
+      assert.match(onProceed.reason, /neither started nor stopped the game/i, 'proceed must say it launched nothing');
+      assert.doesNotMatch(onProceed.reason, /restarted the game/i, 'proceed must not claim a restart it did not do');
     });
 
     await test('decideCharacterVerdict: the word "entered" is only used where this call can defend it', () => {
@@ -478,7 +545,7 @@ async function main() {
       });
       assert.equal(verified.ok, true);
       assert.equal(verified.rosterKey, 'entered');
-      assert.ok(verified.verifiedBy.includes('before and after'), 'the claim must name the bracket it rests on');
+      assert.ok(verified.verifiedBy.includes('two reads'), 'the claim must name the bracket it rests on');
       assert.equal(verified.unverified, undefined);
 
       // THE REVIEW CASE, reachable with nothing exotic: console_run "character.select titan" against
@@ -523,6 +590,22 @@ async function main() {
       assert.equal(parked.ok, false);
       assert.equal(parked.stage, 'characterEnter');
       assert.ok(parked.message.includes(HOLD_SETTING_KEY));
+      // Two different waits are in use now (90s after a press this call made, 20s on a game already
+      // in the world), so "never appeared" without a figure leaves a caller unable to tell which.
+      const timed = decideCharacterVerdict({
+        request: warlock, pickedByThisCall: true, before: warlockRoster, after: warlockRoster,
+        entered: false, waitedMs: 20000,
+      });
+      assert.match(timed.message, /within 20000ms/, 'the failure must name how long it actually waited');
+
+      // And the ok path must not claim a tighter bracket than the code enforces: the first read is
+      // only known to precede the WAIT, not the marker line itself.
+      assert.doesNotMatch(
+        verified.verifiedBy,
+        /both before and after that moment/,
+        'verifiedBy must not claim the first read straddles the marker instant',
+      );
+      assert.match(verified.verifiedBy, /bounds the wait rather than the instant/);
 
       // An unreadable roster on either side is never an ok.
       const blindBefore = decideCharacterVerdict({
@@ -578,8 +661,19 @@ async function main() {
       assert.ok(pick < titleWait, 'the pick must be issued BEFORE the title-screen wait, not after it');
       assert.ok(pick < press, 'the pick must be issued BEFORE Enter is pressed');
       // And the roster must be read before the gate, since the gate is only sound once the endpoint
-      // has answered (that is what proves the log belongs to the running process).
-      assert.ok(at('waitForRoster(', 'the roster poll') < signInGate, 'the roster must be read before the gate');
+      // has answered (that is what proves the log belongs to the running process). Pinned to the
+      // pre-pick CALL, not to `waitForRoster(` -- which matched the function declaration near the
+      // top of the file and so was vacuously true, and would have stayed true with the read moved
+      // after the gate or deleted outright.
+      const rosterRead = at('waitForRoster(CHARACTER_ENDPOINT_TIMEOUT_MS)', 'the pre-pick roster read');
+      const markerRead = at('waitForLogMarker(SIGN_IN_MARKER', 'the sign-in marker read');
+      // Pinned against the MARKER READ, not against decideCharacterStep: the gate's soundness rests
+      // on the endpoint having answered before the log is read (that is what proves the log belongs
+      // to the running process), and a roster read sitting between the marker read and the decision
+      // would satisfy a pin on the decision while breaking exactly that.
+      assert.ok(rosterRead < markerRead, 'the roster must be read before the sign-in marker is read, not after it');
+      assert.ok(markerRead < signInGate, 'and the marker must be read before the step is decided');
+      assert.ok(rosterRead > built.indexOf('async function waitForRoster'), 'the pin must be a call, not the declaration');
     });
 
     // -----------------------------------------------------------------------

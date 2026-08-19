@@ -476,6 +476,77 @@ export function rosterIsReady(roster: Roster | null): boolean {
   return roster !== null && roster.count > 0;
 }
 
+/** What the roster poll knows each time round the loop. */
+export interface RosterWaitObservation {
+  /** Whether the game has answered `character.list` at all yet, ready or not. */
+  everAnswered: boolean;
+  /** Time since the first answer of any kind. Meaningless while `everAnswered` is false. */
+  msSinceFirstAnswer: number;
+  /** How long an answering-but-not-ready game is given before the poll stops believing in it. */
+  graceMs: number;
+  /** Whether the overall budget is spent. */
+  deadlineExpired: boolean;
+}
+
+/**
+ * Whether the roster poll should go round again.
+ *
+ * Two budgets, because the two states mean different things. **Nothing answering** is the ordinary
+ * shape of a boot -- the endpoint is not bound yet -- and deserves the whole timeout. **Answering
+ * but not ready** is nearly always permanent: `character.list` refuses outright for an account that
+ * owns no characters, and an `unknownName` from a DLL that predates the character console never
+ * becomes ready. Spending ninety seconds re-asking those is the same defect as the ninety-second
+ * marker wait on an already-decided question, reached by a different path.
+ *
+ * It is a grace rather than an immediate stop because the window is real, if small: the endpoint
+ * binds at t=125ms and the account is authored from settings at t=172ms, so about fifty
+ * milliseconds exist in which a ready endpoint can hand back an empty roster.
+ *
+ * @param obs Where the poll has got to.
+ * @returns True to poll again.
+ */
+export function shouldKeepPollingRoster(obs: RosterWaitObservation): boolean {
+  if (obs.deadlineExpired) return false;
+  if (!obs.everAnswered) return true;
+  return obs.msSinceFirstAnswer < obs.graceMs;
+}
+
+/**
+ * The sentence a roster poll ends on, which differs by *why* it ended.
+ *
+ * A game that never answered and a game that answered something useless are different problems with
+ * different next steps, and the old single message appended "check log_read" to both -- advice aimed
+ * at a DLL that failed to load, printed directly after a line quoting a console answer that DLL had
+ * just given.
+ *
+ * @param everAnswered Whether any answer arrived.
+ * @param lastReason The last answer or error seen.
+ * @param timeoutMs The overall budget.
+ * @param graceMs The answering-but-not-ready budget.
+ * @returns The message.
+ */
+export function rosterWaitFailure(
+  everAnswered: boolean,
+  lastReason: string,
+  timeoutMs: number,
+  graceMs: number,
+): string {
+  if (!everAnswered) {
+    return (
+      `The game's console endpoint did not answer character.list within ${timeoutMs}ms, so no character ` +
+      `could be chosen (last error: ${lastReason}). Nothing answered at all, so the game may have failed ` +
+      'to load the Sunrise DLL; check log_read.'
+    );
+  }
+  return (
+    `The game answered character.list but never with a loaded roster, so no character could be chosen ` +
+    `(last answer: ${lastReason}). It was re-asked for ${graceMs}ms after its first answer and did not ` +
+    'change, and the two things that produce this do not change with time: an account that owns no ' +
+    'characters, and a Sunrise DLL that predates the character console (which answers unknownName). The ' +
+    'endpoint itself is up, so this is not a DLL that failed to load.'
+  );
+}
+
 /** Which branch `decideGameEnterAction` chose, as the character step needs to see it. */
 export type GameEnterEntry = 'launch' | 'proceed' | 'resumeWorldWait' | 'shortCircuitOk';
 
@@ -519,15 +590,33 @@ export function decideCharacterStep(obs: CharacterStepObservation): CharacterSte
     return { kind: 'verifyOnly' };
   }
   if (obs.signInStarted) {
+    // The tail of this sentence is entry-specific, and that is not a nicety. Reaching here on the
+    // launch branch means launchGame() has already run -- launch-game.ts's script does
+    // `Get-Process destiny2 | Stop-Process -Force` and starts a new instance -- and, when the hold
+    // flag had been on, settings.json has already been rewritten and a backup left beside it. The
+    // response carries that settings object, so a blanket "nothing was changed" would contradict
+    // its own payload in the same JSON.
+    const aftermath =
+      obs.entry === 'launch'
+        ? 'This call pressed nothing and picked nothing. It had already restarted the game before it got ' +
+          'here, though: the instance running now was started by this call, after it force-stopped any ' +
+          'instance that was running before. If it also changed the game settings, the settings object ' +
+          'beside this message says what it changed. This call did not dismiss the title screen, so ' +
+          'something else advanced that new instance past it while this call was waiting for the console ' +
+          'to answer. Call game_kill, then game_enter with the same character again.'
+        : 'This call pressed nothing, picked nothing, and neither started nor stopped the game -- it found ' +
+          'this instance already running and already being signed in. Call game_kill, then game_enter with ' +
+          'the same character again.';
     return {
       kind: 'refuseLatePick',
       reason:
         `This game is already past the point where a character can be chosen: sunrise.log carries ` +
-        `"${SIGN_IN_MARKER}", the step that builds the first account image the client is sent. No pick was ` +
+        `"${SIGN_IN_MARKER}", the step during which the first account image this client is sent gets built. ` +
+        'No pick was ' +
         'made, deliberately -- a selection set now would never reach this client, and would still repoint ' +
         'every action the server resolves for it (equip, dismantle, socket plugs, character-scoped ' +
-        'acquisition), one of which can silently fail a client transaction. Enter was not pressed and ' +
-        'nothing was changed. Call game_kill, then game_enter with the same character again.',
+        'acquisition), and one landing inside a client transaction makes that commit fail while the ' +
+        `console still answers ok. ${aftermath}`,
     };
   }
   return { kind: 'pick' };
@@ -557,6 +646,8 @@ export interface CharacterVerdictObservation {
   entered: boolean;
   /** Why a roster is null, when one is. */
   unreadableReason?: string;
+  /** How long the entered-marker was waited for, so the failure can name it. */
+  waitedMs?: number;
 }
 
 /** A verdict, carrying the sentence a caller reads and the key its roster is reported under. */
@@ -635,13 +726,17 @@ export function decideCharacterVerdict(obs: CharacterVerdictObservation): Charac
   }
 
   if (!obs.entered) {
+    // The figure matters again now that two different waits are in use -- 90s after a press this
+    // call made, 20s on a game that was already in the world -- so "never appeared" without it
+    // leaves a caller unable to tell which wait it just spent.
+    const waited = obs.waitedMs === undefined ? '' : ` within ${obs.waitedMs}ms`;
     return {
       ok: false,
       stage: 'characterEnter',
       rosterKey: 'selectedNow',
       message:
         `The ${who} is selected on the server, but "${CHARACTER_ENTERED_MARKER}" never appeared in ` +
-        'sunrise.log, which means the client is still sitting on the character-selection screen rather ' +
+        `sunrise.log${waited}, which means the client is still sitting on the character-selection screen rather ` +
         `than having walked through it. The usual cause is "${HOLD_SETTING_KEY}" having been true in the ` +
         "game's settings when this instance booted -- it is read once at startup. Call game_kill, then " +
         'game_enter with the same character again; that path turns the flag off before launching.',
@@ -699,8 +794,10 @@ export function decideCharacterVerdict(obs: CharacterVerdictObservation): Charac
     rosterKey: 'entered',
     message: `The game entered the world as the ${who}.`,
     verifiedBy:
-      `This call made the pick; sunrise.log then recorded "${CHARACTER_ENTERED_MARKER}" after it (the client ` +
-      'only leaves that step once a character is chosen), and the server reported this character selected ' +
-      'both before and after that moment. The client\'s own character object was not re-read.',
+      `This call made the pick; sunrise.log then recorded "${CHARACTER_ENTERED_MARKER}" after the keystroke ` +
+      'this call sent (the client only leaves that step once a character is chosen), and the server reported ' +
+      'this character selected on two reads taken around that wait, the second of them after that line had ' +
+      'been seen. The first read is only known to precede the wait, not the line itself, so the pair bounds ' +
+      "the wait rather than the instant. The client's own character object was not re-read.",
   };
 }
