@@ -11,6 +11,9 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { open as openFile, stat as statFile } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
+
+import { getGameProcessInfo } from './tasklist.js';
 
 const DEFAULT_GAME_DIR = 'E:\\Destiny_Sunrise';
 
@@ -159,8 +162,47 @@ export interface KillResult {
   message: string;
 }
 
-/** Runs `taskkill /IM destiny2.exe /F`. Treats "no such process" as a clean, non-error outcome. */
-export function killGame(): Promise<KillResult> {
+/** How long to wait for a killed destiny2.exe to actually leave the process table. */
+const KILL_SETTLE_TIMEOUT_MS = 15_000;
+
+/** Gap between process-table checks while waiting for the kill to take effect. */
+const KILL_SETTLE_POLL_MS = 200;
+
+/**
+ * Waits until `probe` stops reporting the game as running.
+ *
+ * `taskkill /F` returns as soon as Windows has *asked* for the termination, not once it has
+ * happened, so its own SUCCESS line is not evidence the process is gone. Measured 2026-08-19: a
+ * `game_enter` call issued 200 ms after `game_kill` reported SUCCESS still found destiny2.exe in
+ * `tasklist`, took the "already running, world already loaded" branch on the strength of the dead
+ * process's own log, and reported against a console endpoint that had stopped answering. Without a
+ * character asked for, that path returns a plain `ok` -- i.e. the sequence `game_kill` then
+ * `game_enter`, which several of this server's own failure messages tell a caller to run, could
+ * answer success without the game ever having restarted.
+ *
+ * Exported and taking its probe as a parameter so the settle loop can be driven by a test with no
+ * Windows and no game: the loop is the part with the bug in it, and `taskkill.exe` is not.
+ *
+ * @param probe Reads the current process state, e.g. `getGameProcessInfo`.
+ * @param timeoutMs How long to keep checking before giving up.
+ * @param pollMs Gap between checks.
+ * @returns True once the game is observed gone; false if it was still there at the deadline.
+ */
+export async function waitForGameToExit(
+  probe: () => Promise<{ running: boolean }>,
+  timeoutMs: number = KILL_SETTLE_TIMEOUT_MS,
+  pollMs: number = KILL_SETTLE_POLL_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!(await probe()).running) return true;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await sleep(Math.min(pollMs, remaining));
+  }
+}
+
+function runTaskkill(): Promise<KillResult> {
   return new Promise<KillResult>((resolve) => {
     execFile('taskkill.exe', ['/IM', 'destiny2.exe', '/F'], { windowsHide: true }, (error, stdout, stderr) => {
       const output = `${stdout}${stderr}`.trim();
@@ -176,6 +218,30 @@ export function killGame(): Promise<KillResult> {
       resolve({ status: 'failed', message: output || error.message });
     });
   });
+}
+
+/**
+ * Runs `taskkill /IM destiny2.exe /F` and waits for the process to actually be gone. Treats
+ * "no such process" as a clean, non-error outcome.
+ *
+ * The wait is what makes this tool's answer mean what it says -- see `waitForGameToExit`. A process
+ * that is still there at the deadline is still reported as `killed` (the kill was accepted; only
+ * the waiting ran out), but the message says so rather than leaving the caller to find out through
+ * some other tool's confusing answer.
+ */
+export async function killGame(): Promise<KillResult> {
+  const result = await runTaskkill();
+  if (result.status !== 'killed') return result;
+  const gone = await waitForGameToExit(getGameProcessInfo);
+  return gone
+    ? { status: 'killed', message: `${result.message} The process is gone from the process table.` }
+    : {
+        status: 'killed',
+        message:
+          `${result.message} It was still listed by tasklist ${KILL_SETTLE_TIMEOUT_MS}ms later, so anything ` +
+          'that checks whether the game is running may still see it. Call this again, or check with tasklist, ' +
+          'before relying on the game being gone.',
+      };
 }
 
 export interface LogReadResult {

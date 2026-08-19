@@ -54,6 +54,7 @@ import {
   rewriteHoldCharacterSelect,
 } from '../dist/character.js';
 import { waitForLogMarker } from '../dist/keys.js';
+import { waitForGameToExit } from '../dist/game.js';
 
 /** @type {{ name: string; ok: boolean; error?: string }[]} */
 const results = [];
@@ -384,6 +385,34 @@ async function main() {
       const missing = await disableCharacterSelectHold(path.join(dir, 'does-not-exist.json'));
       assert.equal(missing.status, 'refused');
       assert.ok(missing.message.includes('does-not-exist.json'));
+    });
+
+    // -----------------------------------------------------------------------
+    // The kill settle, which the acceptance run found missing the hard way.
+    // -----------------------------------------------------------------------
+
+    await test('game_kill waits for the process to actually leave the process table, not just for taskkill to return', async () => {
+      // The bug this closes, measured 2026-08-19: `game_kill` reported SUCCESS, and a `game_enter`
+      // 200ms later still found destiny2.exe in tasklist, took the "already running, world already
+      // loaded" branch on the dead process's own log, and answered against an endpoint that had
+      // stopped listening. That sequence is the one several of this server's own failure messages
+      // tell a caller to run.
+      let calls = 0;
+      const goesAwayOnThirdLook = async () => ({ running: ++calls < 3 });
+      const start = performance.now();
+      assert.equal(await waitForGameToExit(goesAwayOnThirdLook, 3000, 20), true);
+      assert.equal(calls, 3, 'it must keep looking until the process is gone, not answer on the first look');
+      assert.ok(performance.now() - start >= 20, 'it must actually wait between looks');
+
+      // A process that never goes away must end the wait rather than hang, and must say so.
+      const neverGoesAway = async () => ({ running: true });
+      assert.equal(await waitForGameToExit(neverGoesAway, 120, 20), false);
+
+      // Already gone: answer at once, without sleeping out a poll interval.
+      const alreadyGone = async () => ({ running: false });
+      const quick = performance.now();
+      assert.equal(await waitForGameToExit(alreadyGone, 3000, 500), true);
+      assert.ok(performance.now() - quick < 400, 'an already-dead game must not cost a poll interval');
     });
 
     // -----------------------------------------------------------------------

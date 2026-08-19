@@ -45,7 +45,7 @@ Everything is env vars, with Windows-appropriate defaults — nothing here is WS
 | `console_run` | `line: string` | The endpoint's structured response: `status`, `summary`, `rows`. |
 | `console_describe` | — | The full command/variable registry. |
 | `game_launch` | — | Starts `destiny2.exe` (killing any existing instance first) and waits for its window. |
-| `game_kill` | — | `taskkill /IM destiny2.exe /F`. Safe to call when the game isn't running. |
+| `game_kill` | — | `taskkill /IM destiny2.exe /F`, then waits for the process to actually leave the process table. Safe to call when the game isn't running. |
 | `log_read` | `lines?: number` | The tail of `sunrise.log` (default 200 lines, capped at 1000). |
 | `game_enter` | `character?: string` | Launches if needed, gets past the title screen, and waits for the world to load. With a character named, enters the world as that character and reports which one actually got in; without one, leaves the game at character selection. |
 
@@ -568,6 +568,18 @@ console traffic cannot interleave between two calls either; and the `window` obj
 every path, including the new ones. `game_enter` with no `character` produces byte-identical
 responses to before.
 
+### One thing the acceptance run found on the way
+
+`game_kill` used to return as soon as `taskkill /F` did — which is when Windows has *accepted* the
+termination, not when it has happened. A `game_enter` issued 200 ms later still found `destiny2.exe`
+in `tasklist`, took the "already running, world already loaded" branch on the strength of the dead
+process's own log, and answered against a console endpoint that had already stopped listening. With
+no character asked for, that path returns a plain `ok` — so the sequence `game_kill` then
+`game_enter`, which several of this server's own failure messages tell a caller to run, could report
+success without the game ever having restarted. `killGame` now waits for the process to leave the
+process table (bounded, 15s) and says so; `waitForGameToExit` is exported and takes its probe as a
+parameter so the loop can be tested without Windows.
+
 ## Building
 
 ```
@@ -918,7 +930,7 @@ foreground is not optional for this engine — see "What the 2026-08-18 re-measu
 - `scripts/game-enter-decision-smoke.mjs` — the table-driven test for `decideGameEnterAction` and
   `parseTasklistCsv`, described in "Testing game_enter's branch selection without the game or the
   filesystem". Also run by `npm run test:keys`.
-- `scripts/character-smoke.mjs` — the test for `character.ts`: the
+- `scripts/character-smoke.mjs` — the test for `character.ts` plus the `game_kill` settle: the
   argument parser (including that nothing it accepts can carry a second console token), the two
   console answers parsed from rows captured verbatim off the live endpoint, the two log markers
   checked against real excerpts of a run that entered and a run that parked — both directions, since
