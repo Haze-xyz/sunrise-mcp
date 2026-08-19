@@ -32,6 +32,7 @@ import {
   EndpointTimeoutError,
   EndpointConnectionError,
   EndpointRequestTooLargeError,
+  EndpointBusyError,
 } from '../dist/endpoint.js';
 
 function delay(ms) {
@@ -348,6 +349,97 @@ async function main() {
 
     await busyClient.close();
     busyServer.close();
+  });
+
+  // -------------------------------------------------------------------------
+  // The endpoint writes a reason before closing a connection it will not serve. These two cover
+  // both sides of that: a hold that never clears must be reported as a hold, and a refusal that
+  // does clear must still be retried to success — the fix must not turn the recoverable race above
+  // into a hard failure.
+  // -------------------------------------------------------------------------
+
+  await test('a refusal that never clears is reported as EndpointBusyError naming the holder, not a bare timeout', async () => {
+    const HOLDER_PORT = 53777;
+    let refusals = 0;
+    const heldServer = net.createServer((socket) => {
+      refusals += 1;
+      writeLine(socket, {
+        id: 0,
+        status: 'refused',
+        summary: 'Another client already holds this endpoint, which serves one connection at a time.',
+        rows: [{ key: 'holder_port', value: HOLDER_PORT }],
+      });
+      socket.end();
+    });
+    const port = await listen(heldServer);
+
+    const heldClient = new SunriseEndpointClient({
+      host: '127.0.0.1',
+      port,
+      requestTimeoutMs: 1500,
+      minReconnectDelayMs: 30,
+      reconnectBackoffMs: [30, 60, 60],
+    });
+    /** @type {Error[]} */
+    const busyEvents = [];
+    heldClient.on('busy', (err) => busyEvents.push(err));
+
+    await assert.rejects(() => heldClient.runLine('held.check'), (err) => {
+      assert.ok(err instanceof EndpointBusyError, `expected EndpointBusyError, got ${err?.name}: ${err}`);
+      assert.equal(err.holderPort, HOLDER_PORT);
+      assert.match(err.message, new RegExp(String(HOLDER_PORT)));
+      return true;
+    });
+    assert.ok(refusals >= 2, `expected the client to have retried at least once, saw ${refusals} refusals`);
+    assert.ok(busyEvents.length >= 1, 'expected at least one busy event');
+
+    await heldClient.close();
+    heldServer.close();
+  });
+
+  await test('a refusal that clears is still retried to success, so the reaping race stays recoverable', async () => {
+    let refusals = 0;
+    const clearingServer = net.createServer((socket) => {
+      if (refusals < 2) {
+        refusals += 1;
+        writeLine(socket, {
+          id: 0,
+          status: 'refused',
+          summary: 'Another client already holds this endpoint, which serves one connection at a time.',
+          rows: [{ key: 'holder_port', value: 40001 }],
+        });
+        socket.end();
+        return;
+      }
+      let buffer = Buffer.alloc(0);
+      socket.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        let nl;
+        while ((nl = buffer.indexOf(0x0a)) !== -1) {
+          const raw = buffer.subarray(0, nl).toString('utf8');
+          buffer = buffer.subarray(nl + 1);
+          const req = recordAndParse(raw);
+          if (req !== null) writeLine(socket, { id: req.id, status: 'ok', summary: '', rows: [{ key: 'echo', value: req.line }] });
+        }
+      });
+    });
+    const port = await listen(clearingServer);
+
+    const clearingClient = new SunriseEndpointClient({
+      host: '127.0.0.1',
+      port,
+      requestTimeoutMs: 4000,
+      minReconnectDelayMs: 30,
+      reconnectBackoffMs: [30, 60, 60],
+    });
+
+    const res = await clearingClient.runLine('cleared.check');
+    assert.equal(res.status, 'ok');
+    assert.deepEqual(res.rows, [{ key: 'echo', value: 'cleared.check' }]);
+    assert.equal(refusals, 2, 'expected exactly two refusals before the connection that worked');
+
+    await clearingClient.close();
+    clearingServer.close();
   });
 
   // -------------------------------------------------------------------------

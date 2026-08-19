@@ -70,6 +70,18 @@ endpoint.on('unmatchedResponse', (err: Error) => {
   console.error(`[sunrise-mcp] endpoint sent an unmatched (id: 0) response: ${err.message}`);
 });
 
+// A held endpoint refuses every reconnect, and the client retries for the whole request budget, so
+// this fires many times for one stuck call. The first one carries the whole diagnosis; the rest are
+// the same sentence again. Rate-limited rather than dropped, because a hold that outlives one call
+// should keep saying so in the log a caller reads after the fact.
+const BUSY_LOG_INTERVAL_MS = 5000;
+let nextBusyLogAt = 0;
+endpoint.on('busy', (err: Error) => {
+  if (Date.now() < nextBusyLogAt) return;
+  nextBusyLogAt = Date.now() + BUSY_LOG_INTERVAL_MS;
+  console.error(`[sunrise-mcp] endpoint refused the connection: ${err.message}`);
+});
+
 // game_kill tearing down the game is an expected cause of a connection error (typically
 // ECONNRESET) — that is not worth surfacing as an error the model might reason about. Genuinely
 // unexpected connection errors (the game crashing on its own, a network hiccup) still get logged
@@ -371,7 +383,7 @@ server.registerTool(
       'response: status (one of ok, unknownName, wrongArgumentCount, badArgument, outOfRange, refused, failed), ' +
       'a summary string, and rows of key/value pairs. The endpoint answers from the title screen, before the ' +
       'player presses anything, so this works before any load. The registry is console.*, log.*, movement.*, ' +
-      'player.infinite_ammo, character.*, and -- for driving and reverse-engineering the game from here -- input.*, ' +
+      'player.*, character.*, and -- for driving and reverse-engineering the game from here -- input.*, ' +
       'mem.* and bootflow.character_step. Call console_describe for the authoritative list with help and bounds -- ' +
       'but note it publishes each entry\'s name, kind, help and (for variables) type, bounds and choices, and NOT ' +
       'the arguments a command takes, so what follows is both what an agent needs before deciding what to try and, ' +
@@ -381,6 +393,10 @@ server.registerTool(
       'character from here unless you mean to: character.select answers ok whenever it is called, but only reaches ' +
       'the game when it is called before the game signs in, and owning that ordering is exactly what game_enter\'s ' +
       'character argument is for -- to start the game as a character, call game_enter { character: "warlock" }. ' +
+      'player.position takes no argument and reports where the local player is standing, as present, x, y and z. It ' +
+      'is the witness that a held key moved them: two reads around a hold say so in numbers rather than in prose. ' +
+      'It answers present:false in orbit and during a load, because there is no body to stand anywhere until a ' +
+      'destination is loaded, so a false there is an answer about the game and not a failed read. ' +
       'input.hold <vk> / input.release <vk> / ' +
       'input.release_all report Windows virtual keys held to the game through the DLL\'s GetKeyState hook, several ' +
       'at once, and stay held until released -- that is how you drive movement and abilities. input.hold reports ' +

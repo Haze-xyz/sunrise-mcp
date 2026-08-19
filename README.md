@@ -55,7 +55,8 @@ Three things worth knowing before you drive this from an agent:
   need to wait for a load after `game_launch` resolves — `console_run` and `console_describe` work
   immediately.
 - **The registry is not layer 1's any more.** Alongside `console.*`, `log.*`, `movement.*` and
-  `player.infinite_ammo`, layer 2 publishes forced key input (`input.*`), memory primitives
+  `player.*` (`infinite_ammo`, and `position` — the local player's world position, `present:false`
+  in orbit), layer 2 publishes forced key input (`input.*`), memory primitives
   (`mem.*`), the character roster (`character.*`) and `bootflow.character_step` — the point of layer
   2 being that reverse engineering happens under the MCP rather than beside it. `console_describe`
   is authoritative for *which entries exist*; the section below is the part that is in no help
@@ -868,7 +869,12 @@ One JSON object per line, `\n`-terminated, both directions:
 
 Constraints `endpoint.ts` has to respect, each the reason for something in the code:
 
-- **One connection at a time.** A second is accepted then immediately closed by the endpoint.
+- **One connection at a time.** A second connection is accepted, answered with one framed
+  `{"id":0,"status":"refused",...}` object whose `holder_port` row names the holder's own port,
+  and then closed. A holder keeps the slot for the life of its process, not the life of a call, so
+  two MCP servers at once means the second never works — `EndpointBusyError` says which process to
+  kill. Before the endpoint wrote that reason, this was indistinguishable from an endpoint that was
+  not there, and it was written up as an orbit-only fault for a week.
 - **`id` must be a non-zero JSON number.** Zero means "absent".
 - **No server-side timeout, anywhere.** `endpoint.ts` enforces its own per-request timeout
   (`requestTimeoutMs`, default 10s) and rejects the pending promise when it fires.

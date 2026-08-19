@@ -21,19 +21,25 @@
  *
  * Endpoint constraints this client has to respect, each one learned from the endpoint's own code,
  * its reviews, or a live capture (see README.md's "Wire protocol" section for the details):
- *   - Only one connection is accepted at a time; a second is accepted then immediately closed.
+ *   - Only one connection is accepted at a time. A second is accepted, told why in one framed
+ *     `{"id":0,"status":"refused",...}` object naming the holder's port, and then closed.
  *   - `id` must be a non-zero JSON number. Zero means "absent".
  *   - The endpoint never times out a request on its own, so this client enforces its own
  *     per-request timeout and rejects the pending promise when it fires.
  *   - The maximum request envelope is 512 bytes. An over-long request is rejected client-side
  *     with a clear error instead of being sent and coming back as an uncorrelatable `id: 0`.
- *   - Two classes of failure answer on `id: 0`: an over-long envelope, and a request so malformed
- *     no id could even be parsed. Such a reply can never be matched to a pending request, so it is
- *     surfaced as an `unmatchedResponse` event rather than dropped or misapplied to some other
- *     pending call.
+ *   - Three things arrive on `id: 0`: an over-long envelope, a request so malformed no id could
+ *     even be parsed, and the connection refusal above. The first two can never be matched to a
+ *     pending request and are surfaced as an `unmatchedResponse` event rather than dropped or
+ *     misapplied to some other pending call. The refusal is not an answer to any request at all,
+ *     and is surfaced as a `busy` event and remembered, so a request that runs out its budget
+ *     against a held endpoint fails with `EndpointBusyError` rather than a bare timeout.
  *   - Reconnecting immediately after a connection closes can race the endpoint's own reaping of
  *     the old connection slot, producing `stage=accept result=busy` on the game side. This client
  *     waits a minimum gap after any close, and backs off further after repeated connect failures.
+ *     That race clears on its own within a few hundred milliseconds, which is why a refusal is
+ *     retried rather than raised at once — a holder that is a live process does not clear, and the
+ *     difference between the two is how long the refusals keep coming, not what they say.
  *
  * Retry policy (a request-level concern, not just a connection-level one): a request whose
  * connection attempt fails, or whose connection is closed before the socket has ever completed a
@@ -41,7 +47,8 @@
  * exhausted. This is what lets `console_run` recover from being called the instant after
  * `game_launch` resolves, before the endpoint's listener is necessarily bound yet, and from the
  * endpoint's busy-connection-slot race — in both cases nothing could have reached the game, so
- * re-sending is safe. Once a connection has proven itself with at least one real response, a
+ * re-sending is safe. A refusal that keeps coming back for the whole budget is reported as
+ * `EndpointBusyError`, which names the holder rather than saying the endpoint never answered. Once a connection has proven itself with at least one real response, a
  * later drop is NOT retried automatically: the game may already have processed that request, and
  * silently re-sending a console line risks running it twice. That failure is surfaced immediately
  * instead.
@@ -107,6 +114,25 @@ interface RawFrame {
   [extra: string]: unknown;
 }
 
+/**
+ * Reads a connection refusal out of an id: 0 frame, or reports that it is not one.
+ *
+ * Matched on the status plus the row the endpoint writes rather than on the sentence, so rewording
+ * the sentence on the game side cannot silently turn this back into an unexplained close. A refusal
+ * whose row is missing still counts: the port is what makes it actionable, not what makes it a
+ * refusal, and losing the diagnosis over a missing row would be the old failure in a new place.
+ *
+ * @param frame One decoded id: 0 frame.
+ * @return Its holder port and sentence, or null when the frame is not a refusal.
+ */
+function readRefusal(frame: RawFrame): { holderPort: number; summary: string } | null {
+  if (frame.status !== 'refused') return null;
+  const summary = typeof frame.summary === 'string' ? frame.summary : '';
+  const rows = Array.isArray(frame.rows) ? (frame.rows as RunRow[]) : [];
+  const port = rows.find((row) => row.key === 'holder_port')?.value;
+  return { holderPort: typeof port === 'number' ? port : 0, summary };
+}
+
 function isRawFrame(value: unknown): value is RawFrame {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -167,6 +193,36 @@ export class EndpointClosedError extends Error {
   }
 }
 
+/**
+ * The endpoint is up and answering, and is already serving somebody else.
+ *
+ * Distinct from `EndpointConnectionError` on purpose: that one means nothing was reached, and the
+ * remedy is to wait or to start the game. This one means the endpoint was reached, understood the
+ * connection, and turned it away — the remedy is to find the process holding it. Telling the two
+ * apart is only possible because the endpoint now writes a reason before it closes; before that,
+ * both looked like a socket that reset itself.
+ */
+export class EndpointBusyError extends Error {
+  override readonly name = 'EndpointBusyError';
+  constructor(
+    readonly requestId: number,
+    readonly holderPort: number,
+    readonly summary: string,
+    readonly timeoutMs: number,
+  ) {
+    super(
+      `The Sunrise console endpoint is held by another client, which refused this connection for the ` +
+        `whole ${timeoutMs}ms this request was allowed. The endpoint serves one connection at a time, so ` +
+        `this clears when the holder lets go` +
+        (holderPort > 0
+          ? `. The holder's own port is ${holderPort}: \`Get-NetTCPConnection -LocalPort ${holderPort}\` ` +
+            `names the process, which is typically a sunrise-mcp server left running from an earlier session`
+          : '') +
+        `. The endpoint said: ${summary}`,
+    );
+  }
+}
+
 /** An id: 0 reply, or a line so malformed no id could be parsed. Cannot be matched to a request. */
 export class EndpointUnmatchedResponseError extends Error {
   override readonly name = 'EndpointUnmatchedResponseError';
@@ -185,7 +241,8 @@ interface PendingRequest {
  * Maintains a single persistent connection to the Sunrise console endpoint, reconnecting on
  * demand when the connection has dropped. Emits `protocolError` and `unmatchedResponse` for
  * traffic that cannot be attached to any pending request; emits `connectionError` for socket-level
- * errors on an already-established connection. None of these events have listeners required —
+ * errors on an already-established connection; emits `busy` when the endpoint refuses a connection
+ * because another client holds it. None of these events have listeners required —
  * they exist so a host (e.g. the MCP server) can log them without the client throwing on the
  * network's own timeline.
  *
@@ -209,6 +266,15 @@ export class SunriseEndpointClient extends EventEmitter {
   private reconnectFailures = 0;
   /** True once the *current* connection has completed at least one full request/response round trip. */
   private connectionHasSucceeded = false;
+  /**
+   * The last connection refusal the endpoint wrote, and when it arrived.
+   *
+   * Kept on the client rather than on the request because the frame carries no id — it answers the
+   * connection, not anything sent on it. A request compares this timestamp against its own start to
+   * decide whether the refusal happened while *it* was trying, which is what lets its timeout say
+   * "somebody else holds the endpoint" instead of "no answer".
+   */
+  private lastRefusal: { at: number; holderPort: number; summary: string } | null = null;
   private closed = false;
   /** Aborted by close() so a reconnect delay or an in-flight handshake stops immediately, rather
    *  than close() merely waiting for it to finish naturally on its own schedule. */
@@ -302,8 +368,22 @@ export class SunriseEndpointClient extends EventEmitter {
         fn();
       };
 
+      // Read before the first attempt, so the comparison below covers every retry this request
+      // makes and nothing that happened before it started.
+      const startedAt = Date.now();
       const overallTimer = setTimeout(() => {
-        finish(() => reject(new EndpointTimeoutError(id, this.requestTimeoutMs)));
+        // A refusal seen while this request was trying explains the silence, and a plain timeout
+        // does not. Retrying was still right — the endpoint's own reaping of a closed connection
+        // produces the same refusal for a few hundred milliseconds, and that case resolves itself
+        // — so this changes only what the caller is told once the budget is gone.
+        const refusal = this.lastRefusal;
+        finish(() =>
+          reject(
+            refusal && refusal.at >= startedAt
+              ? new EndpointBusyError(id, refusal.holderPort, refusal.summary, this.requestTimeoutMs)
+              : new EndpointTimeoutError(id, this.requestTimeoutMs),
+          ),
+        );
       }, this.requestTimeoutMs);
 
       // See the class-level "Retry policy" doc comment for the reasoning behind this condition.
@@ -359,49 +439,84 @@ export class SunriseEndpointClient extends EventEmitter {
     return this.connectPromise;
   }
 
+  /**
+   * Makes one attempt's abort signal, forwarding `close()` to it until the attempt is over.
+   *
+   * `close()`'s own signal lives as long as the client, and both `createConnection` and the delay
+   * below register an abort listener on whatever signal they are handed without ever taking it off
+   * again. Handing them the long-lived one directly therefore leaks a listener per attempt —
+   * measured at roughly ninety a second against an endpoint that keeps refusing, growing without
+   * bound, which is exactly the shape a held endpoint now produces. Forwarding through a
+   * per-attempt controller keeps that growth on an object that dies with the attempt, and leaves
+   * one listener on the durable signal that `dispose` removes.
+   *
+   * @return The signal to hand to this attempt, and the call that unhooks it afterwards.
+   */
+  private attemptAbort(): { signal: AbortSignal; dispose: () => void } {
+    const controller = new AbortController();
+    if (this.closeController.signal.aborted) {
+      controller.abort();
+      return { signal: controller.signal, dispose: () => undefined };
+    }
+    const onAbort = () => controller.abort();
+    this.closeController.signal.addEventListener('abort', onAbort, { once: true });
+    return {
+      signal: controller.signal,
+      dispose: () => this.closeController.signal.removeEventListener('abort', onAbort),
+    };
+  }
+
   private async connectNow(): Promise<Socket> {
     const gapNeeded = this.lastCloseAt === 0 ? 0 : this.minReconnectDelayMs - (Date.now() - this.lastCloseAt);
     const backoff = this.reconnectFailures > 0 ? this.backoffDelay() : 0;
     const waitMs = Math.max(gapNeeded, backoff, 0);
-    if (waitMs > 0) {
-      try {
-        await sleep(waitMs, undefined, { signal: this.closeController.signal });
-      } catch {
-        // Aborted by close(): stop waiting immediately instead of riding out the rest of the
-        // gap/backoff delay. The `this.closed` check right below is what actually settles this.
+    const attemptAbort = this.attemptAbort();
+    try {
+      if (waitMs > 0) {
+        try {
+          await sleep(waitMs, undefined, { signal: attemptAbort.signal });
+        } catch {
+          // Aborted by close(): stop waiting immediately instead of riding out the rest of the
+          // gap/backoff delay. The `this.closed` check right below is what actually settles this.
+        }
       }
+      if (this.closed) {
+        throw new EndpointClosedError();
+      }
+
+      return await new Promise<Socket>((resolve, reject) => {
+        const socket = createConnection({ host: this.host, port: this.port, signal: attemptAbort.signal });
+
+        const onConnect = () => {
+          socket.off('error', onInitialError);
+          if (this.closed) {
+            socket.destroy();
+            reject(new EndpointClosedError());
+            return;
+          }
+          this.reconnectFailures = 0;
+          this.attachSocket(socket);
+          resolve(socket);
+        };
+        const onInitialError = (err: Error) => {
+          socket.off('connect', onConnect);
+          if (this.closed) {
+            reject(new EndpointClosedError());
+            return;
+          }
+          this.reconnectFailures += 1;
+          reject(new EndpointConnectionError(`Could not connect to ${this.host}:${this.port}: ${err.message}`, err));
+        };
+
+        socket.once('connect', onConnect);
+        socket.once('error', onInitialError);
+      });
+    } finally {
+      // Unhooked whichever way the attempt ended. A socket that reached `connect` no longer needs
+      // it: `close()` ends an established socket itself rather than through the signal, so nothing
+      // downstream of here depends on the forwarding staying in place.
+      attemptAbort.dispose();
     }
-    if (this.closed) {
-      throw new EndpointClosedError();
-    }
-
-    return new Promise<Socket>((resolve, reject) => {
-      const socket = createConnection({ host: this.host, port: this.port, signal: this.closeController.signal });
-
-      const onConnect = () => {
-        socket.off('error', onInitialError);
-        if (this.closed) {
-          socket.destroy();
-          reject(new EndpointClosedError());
-          return;
-        }
-        this.reconnectFailures = 0;
-        this.attachSocket(socket);
-        resolve(socket);
-      };
-      const onInitialError = (err: Error) => {
-        socket.off('connect', onConnect);
-        if (this.closed) {
-          reject(new EndpointClosedError());
-          return;
-        }
-        this.reconnectFailures += 1;
-        reject(new EndpointConnectionError(`Could not connect to ${this.host}:${this.port}: ${err.message}`, err));
-      };
-
-      socket.once('connect', onConnect);
-      socket.once('error', onInitialError);
-    });
   }
 
   private backoffDelay(): number {
@@ -469,8 +584,17 @@ export class SunriseEndpointClient extends EventEmitter {
     }
 
     if (parsed.id === 0) {
-      // Either the request envelope was over-long, or so malformed no id could be parsed. Either
-      // way this can never be matched to a specific pending request.
+      // Three things arrive on id: 0 — an over-long request envelope, a request so malformed no id
+      // could be parsed, and the endpoint's refusal of a connection it will not serve. The first
+      // two are answers to something this client sent and cannot be matched back to it. The third
+      // is not an answer to anything: it is the endpoint saying another client holds it, written
+      // before it closes the socket. Only that one is actionable, and only that one is not noise.
+      const refusal = readRefusal(parsed);
+      if (refusal) {
+        this.lastRefusal = { at: Date.now(), ...refusal };
+        this.emit('busy', new EndpointBusyError(0, refusal.holderPort, refusal.summary, this.requestTimeoutMs));
+        return;
+      }
       this.emit(
         'unmatchedResponse',
         new EndpointUnmatchedResponseError(
