@@ -43,6 +43,16 @@ export function getExePath(): string {
   return path.win32.join(getGameDir(), 'destiny2.exe');
 }
 
+/**
+ * The Sunrise DLL's settings file — `bin\x64\Sunrise\settings.json`, *not* `bin\x64\settings.json`,
+ * which nothing reads. `game_enter` needs it because one key in it (`client.hold_character_select`)
+ * is read at boot and decides whether a chosen character can reach the client at all; see
+ * `disableCharacterSelectHold` in character.ts.
+ */
+export function getSettingsPath(): string {
+  return path.win32.join(getGameDir(), 'bin', 'x64', 'Sunrise', 'settings.json');
+}
+
 export interface LaunchResult {
   status: 'launched' | 'failed';
   pid?: number;

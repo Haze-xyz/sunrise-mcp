@@ -47,7 +47,7 @@ Everything is env vars, with Windows-appropriate defaults — nothing here is WS
 | `game_launch` | — | Starts `destiny2.exe` (killing any existing instance first) and waits for its window. |
 | `game_kill` | — | `taskkill /IM destiny2.exe /F`. Safe to call when the game isn't running. |
 | `log_read` | `lines?: number` | The tail of `sunrise.log` (default 200 lines, capped at 1000). |
-| `game_enter` | — | Launches if needed, gets past the title screen, and waits for the world to load. Leaves the game at character selection. |
+| `game_enter` | `character?: string` | Launches if needed, gets past the title screen, and waits for the world to load. With a character named, enters the world as that character and reports which one actually got in; without one, leaves the game at character selection. |
 
 Three things worth knowing before you drive this from an agent:
 
@@ -56,9 +56,17 @@ Three things worth knowing before you drive this from an agent:
   immediately.
 - **The registry is not layer 1's any more.** Alongside `console.*`, `log.*`, `movement.*` and
   `player.infinite_ammo`, layer 2 publishes forced key input (`input.*`), memory primitives
-  (`mem.*`) and `bootflow.character_step` — the point of layer 2 being that reverse engineering
-  happens under the MCP rather than beside it. `console_describe` is authoritative; the section
-  below is the part that is in no help string and that you need before building on them.
+  (`mem.*`), the character roster (`character.*`) and `bootflow.character_step` — the point of layer
+  2 being that reverse engineering happens under the MCP rather than beside it. `console_describe`
+  is authoritative for *which entries exist*; the section below is the part that is in no help
+  string and that you need before building on them.
+- **`console_describe` does not publish argument metadata.** The endpoint's describe reply carries
+  each entry's name, kind, help text and — for variables — type, bounds and choices. It does not
+  carry the arguments a *command* declares, so describe tells you `character.select` exists and not
+  that it takes one. That gap is filled from the TypeScript side: `console_run`'s own tool
+  description carries the argument syntax for the entries where it matters. Closing it properly
+  means teaching `encode_registry` in `console_protocol.cpp` to emit `arguments`, which is a change
+  in the C++ repo, not this one.
 - **`console_run` alone still cannot get past the title screen.** It *does* have key-input
   primitives now, and they are attached and answering `ok` at the title screen — but the title
   screen does not read them. Use `game_enter`; see "Getting past the title screen" below, and the
@@ -450,6 +458,116 @@ strictly the last line printed. Turning that parsed line into a `PressResult` is
 `interpretPressKeyOutput`, kept pure and exported precisely so the keys smoke test can drive every
 branch — including the route naming a caller switches on — without a running game.
 
+## Entering the world as a named character (`game_enter { character }`)
+
+`game_enter` takes an optional `character` — `"titan"`, `"hunter"`, `"warlock"`, or an index into
+`character.list` — and the point of it is that **the tool owns the ordering**, not its caller.
+"Start the game and select warlock" is one call.
+
+The console side of this lives in the C++ repo: `character.list` reports the account's characters
+with their class and key, and `character.select <class|index>` moves the server's selection. Both
+were measured against the running game on 2026-08-18: a selection made *before the client signs in*
+makes the game boot straight into orbit as that character, with no `ws-504` sent and no click
+anywhere; a selection made at the character-select screen changes nothing the client can see. So the
+whole feature is a question of *when*, and that is exactly what an agent holding only a console line
+cannot get right.
+
+### The ordering, and why it is not the obvious one
+
+Measured on one launch, 2026-08-19, with the wall clock of the calling process and the client's own
+log timestamps side by side:
+
+```
+wall t= 0.0s  launch
+wall t=15.6s  character.select warlock -> ok, index 2          client t ~4.6s
+wall t=22.8s  "Entering state 'bootflow:start'" (title screen) client t=12.1s
+wall t=24.7s  Enter, SendInput
+              "Entering state 'bootflow:bap_signin'"           client t=15.1s   <- the deadline
+              "Leaving state 'character:signin'"               client t=31.7s
+```
+
+The first Family-4 push is built out of the account snapshot during `bootflow:bap_signin`, and that
+is the moment the pick has to already be in State. It happened **2.3 seconds after the title-screen
+marker and about a second after the key press**. The obvious ordering — get to the title screen, then
+pick, then press — is therefore a race lost on any fast boot. The console endpoint, on the other
+hand, answers about seven seconds *before* the title-screen marker, so `game_enter` polls
+`character.list` until the endpoint comes up and makes the pick there, before it starts waiting for
+the title screen at all. That is the whole reason this is a `game_enter` argument and not advice in
+a help string.
+
+### The settings flag, and why this tool writes a file you own
+
+`client.hold_character_select` in `<game dir>\bin\x64\Sunrise\settings.json` forces the client to
+park on the character-select screen. It is read **once, at boot**, by a hook the console cannot
+reach, and while it is true no chosen character reaches the client. So `game_enter` turns it off, in
+the file, before launching.
+
+That is a deliberate choice over the alternative — refusing with "edit this JSON and call me back" —
+and the argument is short: the caller this feature exists for is an agent holding six MCP tools and
+no filesystem access, for whom that instruction cannot be followed. Refusing would make the feature
+unreachable by its own audience. What makes writing it acceptable is that it is neither silent nor
+lossy:
+
+- the response carries a `settings` object naming the file, the key, the value found and the value
+  written, on every call that changed anything;
+- the whole original file is copied to `settings.json.sunrise-mcp-backup` before the **first** write
+  and never overwritten afterwards, so the state before this server ever touched it survives;
+- the edit is one token — `true` becomes `false` — with every other byte of a ~74 KB file untouched,
+  because it is a substring replacement and not a `JSON.parse`/`stringify` round trip;
+- it happens only when a character was actually asked for, and only when the flag is not already off.
+
+Two cases are **refused instead of repaired**, without launching: the key being absent (the game's
+own default is `true`, so a value has to be *added*, which means editing the shape of a config file
+rather than one value in it) and the key appearing twice (the game's settings parser rejects a
+duplicate key, so that file is already not being read the way it looks). Both refusals say what to
+edit.
+
+The flag is not put back afterwards. It is read at boot, so restoring it after the launch would mean
+every call had to flip it again, and a crash between flip and restore would leave it flipped anyway.
+
+### What "the warlock entered" is actually evidence of
+
+The response reports `requested` and `entered` side by side, and two things back the claim:
+
+- `sunrise.log` carries `Leaving state 'character:signin'`. This is **not** `WORLD_LOADED_MARKER`:
+  measured, `successfully changed world to: orbit_d2` is written about four seconds *before* the
+  client even enters `character:signin`, and it appears identically on a run that then parks on the
+  selection screen forever. Leaving that step is what does not happen without a selection — the
+  control run with no pick posted the same UI substage `26 -> 30 -> 31` and stopped there, while the
+  run with a pick crossed it in 334 ms.
+- `character.list` reports that character selected on the server.
+
+What it does **not** do is re-read the client's own character object. The two were shown to agree for
+all three classes by opening the character sheet in the runs recorded in `task-select-report.md`;
+this tool does not repeat that, and its `verifiedBy` string says so rather than claiming more.
+
+### Failing, and the stages a caller sees
+
+Five failure stages exist only when a character was asked for, and each says what to do next:
+`character` (the word is not a class — refused locally, before anything is launched, so a typo costs
+nothing), `characterHold` (the settings flag could not be turned off, or *this* boot already has the
+hold hook attached — proven by `ev=bootflow stage=character_select result=ok` in the log, which is
+evidence about the running boot rather than about a file that may have changed since), `characterSelect`
+(the console refused the pick — an unknown class for this account, two characters sharing a class, an
+index past the roster — with the console's own summary and the account's roster quoted), `characterEnter`
+(the character is selected but the client never left the selection screen) and `characterVerify`
+(a different character is in, or the call arrived after sign-in and could not change anything).
+
+A pick that would land too late is refused rather than reported as success. Called against a game
+already past sign-in, `game_enter` reports which character that game is actually in as, and says
+that `game_kill` followed by the same call is how to change it.
+
+### None of the press machinery moved
+
+The `character` argument adds console calls and log waits around the existing sequence and changes no
+part of it. The durable press record and its in-process cache are written on exactly the same
+condition as before (`press.status === 'sent'`, i.e. the `sendInput` route); the `postMessage`
+fallback still fails at stage `keyPress` before any character work happens, writing no record and
+leaving a retry free to press again; the serializer still wraps the whole handler, so the added
+console traffic cannot interleave between two calls either; and the `window` object is reported on
+every path, including the new ones. `game_enter` with no `character` produces byte-identical
+responses to before.
+
 ## Building
 
 ```
@@ -515,7 +633,7 @@ WSL node — the explicit parameter is the smallest change that makes this testa
 source-compatible with the one-argument `waitForTitleScreen(timeoutMs)` signature.
 
 ```
-npm run test:keys   # builds, then runs scripts/keys-smoke.mjs
+npm run test:keys   # builds, then runs keys-smoke, game-enter-decision-smoke and character-smoke
 ```
 
 It covers: `false` before the marker line is present and the timeout is hit; `true` once the marker
@@ -776,6 +894,12 @@ foreground is not optional for this engine — see "What the 2026-08-18 re-measu
   `decideGameEnterAction`'s `pressedThisSession` input. The file survives an MCP server restart; the
   cache survives the file's own write silently failing within one process's lifetime. See "Getting
   past the title screen" above.
+- `src/character.ts` — everything behind `game_enter`'s `character` argument that is not I/O against
+  the game: the argument parser, the two `character.*` console answers, the two log markers that say
+  what the client did with a pick, and the settings rewrite that decides whether it can act on one at
+  all. Split out for the same reason `game-enter-decision.ts` was — all of it is decidable from text,
+  so `scripts/character-smoke.mjs` can pin it with a table instead of a one-minute launch. See
+  "Entering the world as a named character" above.
 - `src/serialize.ts` — `createSerializer`, the one-at-a-time call queue `game_enter` runs inside so
   two concurrent invocations cannot both observe "not pressed yet" and both press. Pure, no imports,
   tested by table in `scripts/game-enter-decision-smoke.mjs`.
@@ -794,4 +918,11 @@ foreground is not optional for this engine — see "What the 2026-08-18 re-measu
 - `scripts/game-enter-decision-smoke.mjs` — the table-driven test for `decideGameEnterAction` and
   `parseTasklistCsv`, described in "Testing game_enter's branch selection without the game or the
   filesystem". Also run by `npm run test:keys`.
+- `scripts/character-smoke.mjs` — the test for `character.ts`: the
+  argument parser (including that nothing it accepts can carry a second console token), the two
+  console answers parsed from rows captured verbatim off the live endpoint, the two log markers
+  checked against real excerpts of a run that entered and a run that parked — both directions, since
+  the claim is that the marker separates them — the settings rewrite asserted byte-for-byte on
+  everything it must not touch, and a real MCP client over stdio reading `tools/list` to confirm the
+  `character` argument and its legal values are actually published. Also run by `npm run test:keys`.
 - `scripts/smoke.mjs` — the live-game counterpart, described in "Testing against a live game".
