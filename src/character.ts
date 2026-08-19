@@ -418,3 +418,289 @@ export async function disableCharacterSelectHold(settingsPath: string): Promise<
       `is left false rather than restored. The original file was copied to ${backupPath}.`,
   };
 }
+
+/**
+ * The line sunrise.log emits when the client enters BAP sign-in — the deadline for a pick.
+ *
+ * `family4_snapshot_preparer` builds the first Family-4 image out of `account_snapshot()` during
+ * this step, so a selection that is not in State by the time this line appears never reaches the
+ * client. Measured 2026-08-19 it landed at client t=15.1s, **2.3 seconds after the title-screen
+ * marker and about one second after the key press**, which is the whole reason the pick is made when
+ * the console endpoint first answers rather than when the title screen appears.
+ *
+ * It is also the gate on making a pick at all. A pick after this point does not reach the client and
+ * is not harmless: `character_console.cpp` records that every action the server prepares starts by
+ * finding the selected character, so a late pick moves equip, unequip, dismantle, socket plugs, item
+ * state and character-scoped acquisition at once, and one landing inside a client transaction makes
+ * that commit fail while the console still answers ok. `game_enter` owning the ordering has to mean
+ * refusing here, not assuming.
+ */
+export const SIGN_IN_MARKER = "Entering state 'bootflow:bap_signin'";
+
+/**
+ * ## Why the marker reads in this file are whole-file, and what that rests on
+ *
+ * `sunrise.log` holds exactly one boot. `open_log_file` in the DLL's `core/logging/log.cpp` does two
+ * things before it returns a handle: `MoveFileExW(logPath -> logPath + ".old",
+ * MOVEFILE_REPLACE_EXISTING)`, and then `CreateFileW(..., CREATE_ALWAYS, ...)`, which truncates even
+ * if that rename failed. Either one alone would be enough; both run on every `log::initialize`,
+ * which is once per DLL load. This is read out of the source, not assumed from the presence of a
+ * `sunrise.log.old` on disk.
+ *
+ * The one thing it rests on is `core.logging.file_sink` being true. With the file sink off the DLL
+ * writes no file at all, so whatever `sunrise.log` is on disk is a previous boot's and *every*
+ * marker in `game_enter` — the title screen and world-load ones included, long before this feature —
+ * reads a stale file. That is a whole-tool precondition, not something these three reads introduce.
+ *
+ * Where an anchor is available for free it is still used (the title-screen wait after a fresh launch
+ * keeps its `sinceOffset`), because a redundant guard costs nothing. Where one is not — the hold-hook
+ * line is written ~3.5s into a boot, which can be before `launchGame` returns — the whole-file read
+ * is the correct one and the rotation above is what makes it sound. The `SIGN_IN_MARKER` gate needs
+ * neither: it is only ever read *after* `character.list` has answered, and the endpoint cannot answer
+ * until the running process's own DLL has initialized, which is after that process rotated the file.
+ */
+
+/**
+ * Whether a `character.list` answer is the game saying "the pick can be made now".
+ *
+ * An empty roster this early in a boot is not an account that owns nobody, it is a roster that has
+ * not been built yet: the characters are authored from settings during startup, and the console
+ * endpoint binds well before that finishes (`console_endpoint stage=listen` is at t=125ms). Treating
+ * the first answer that arrives as final -- which is what polling only on a thrown error amounts to
+ * -- fails the whole call on a game that was merely a few hundred milliseconds early.
+ *
+ * @param roster The parsed roster, or null when the answer could not be read at all.
+ * @returns True when the roster is loaded and a pick can be made against it.
+ */
+export function rosterIsReady(roster: Roster | null): boolean {
+  return roster !== null && roster.count > 0;
+}
+
+/** Which branch `decideGameEnterAction` chose, as the character step needs to see it. */
+export type GameEnterEntry = 'launch' | 'proceed' | 'resumeWorldWait' | 'shortCircuitOk';
+
+/** What game_enter knows when it is about to decide whether to make the pick. */
+export interface CharacterStepObservation {
+  entry: GameEnterEntry;
+  /**
+   * Whether `SIGN_IN_MARKER` is already in this boot's log. Only meaningful once the console
+   * endpoint has answered, which is what proves the log belongs to the running process.
+   */
+  signInStarted: boolean;
+}
+
+/** What game_enter should do about the character it was given. */
+export type CharacterStep =
+  | { kind: 'pick' }
+  | { kind: 'refuseLatePick'; reason: string }
+  | { kind: 'verifyOnly' };
+
+/**
+ * Decides whether the pick can still be made on the game that is in front of us.
+ *
+ * The rule: **a pick is only issued when this call can positively justify that sign-in has not
+ * started.** Absence of a press record is not that justification, and that gap was real — the
+ * `proceed` branch is reached whenever the game is running, the world marker is absent, the pid is
+ * known and *this server* has no record of pressing, which includes a game a human or another agent
+ * pressed Enter on and which is already mid sign-in. Issuing `character.select` there repoints every
+ * action the server resolves, for a client that will never see it. See `SIGN_IN_MARKER`.
+ *
+ * `launch` is not exempt. It is the one branch where a stale marker is conceivable (the pick is
+ * issued after a poll that can run for a minute), and refusing on a marker that is genuinely there
+ * is right in every case, so it goes through the same gate rather than being trusted.
+ *
+ * The two already-entered branches never pick: the question there is only who is in.
+ *
+ * @param obs What is known at the decision point.
+ * @returns The step to take.
+ */
+export function decideCharacterStep(obs: CharacterStepObservation): CharacterStep {
+  if (obs.entry === 'shortCircuitOk' || obs.entry === 'resumeWorldWait') {
+    return { kind: 'verifyOnly' };
+  }
+  if (obs.signInStarted) {
+    return {
+      kind: 'refuseLatePick',
+      reason:
+        `This game is already past the point where a character can be chosen: sunrise.log carries ` +
+        `"${SIGN_IN_MARKER}", the step that builds the first account image the client is sent. No pick was ` +
+        'made, deliberately -- a selection set now would never reach this client, and would still repoint ' +
+        'every action the server resolves for it (equip, dismantle, socket plugs, character-scoped ' +
+        'acquisition), one of which can silently fail a client transaction. Enter was not pressed and ' +
+        'nothing was changed. Call game_kill, then game_enter with the same character again.',
+    };
+  }
+  return { kind: 'pick' };
+}
+
+/** Whether the roster's selected character is the one `request` named. */
+export function rosterMatchesRequest(request: ResolvedCharacterRequest, roster: Roster): boolean {
+  if (roster.selected === null) return false;
+  return request.kind === 'class'
+    ? roster.selected.characterClass === request.token
+    : roster.selected.index === request.index;
+}
+
+/** The two roster reads and the log wait that a verdict is decided from. */
+export interface CharacterVerdictObservation {
+  request: ResolvedCharacterRequest;
+  /**
+   * Whether *this call* made the pick. Only then can the entered-marker be attributed to it, and
+   * only then is the word "entered" defensible -- see `decideCharacterVerdict`.
+   */
+  pickedByThisCall: boolean;
+  /** The roster read before the entered-marker wait, or null when it could not be read. */
+  before: Roster | null;
+  /** The roster read after it, or null when the wait failed or it could not be read. */
+  after: Roster | null;
+  /** Whether the entered-marker appeared within the wait. */
+  entered: boolean;
+  /** Why a roster is null, when one is. */
+  unreadableReason?: string;
+}
+
+/** A verdict, carrying the sentence a caller reads and the key its roster is reported under. */
+export interface CharacterVerdict {
+  ok: boolean;
+  stage: 'characterVerify' | 'characterEnter';
+  /** `entered` only where this call can defend the word; `selectedNow` everywhere else. */
+  rosterKey: 'entered' | 'selectedNow';
+  message: string;
+  /** On the ok path, what the claim rests on. */
+  verifiedBy?: string;
+  /** On the ok path, why there is no claim to make. */
+  unverified?: string;
+}
+
+/**
+ * Decides what to say about which character is in, from two roster reads bracketing the log wait.
+ *
+ * **Why two reads.** One read plus "the marker is somewhere in the log" is not evidence about the
+ * same moment, and the gap is reachable without anything exotic: `console_run "character.select
+ * titan"` against a game already in orbit as the warlock, then `game_enter { character: "titan" }`,
+ * and a single-read verdict answers ok with `entered: titan` and a verification string attached.
+ * Reading the roster before the wait and again after it means the ok path can say the selection was
+ * the requested one on both sides of the moment the client left the character step, and can name the
+ * disagreement when it was not.
+ *
+ * **Why `pickedByThisCall` still gates the word "entered".** The bracket only correlates when the
+ * marker lands *inside* it. On the two branches where the game was already in the world, the marker
+ * is somewhere in the past and both reads happen after it, so the bracket collapses and proves
+ * nothing about sign-in. Those answers report `selectedNow` and say plainly that the two
+ * observations are not time-correlated, rather than dressing a guess as a measurement.
+ *
+ * @param obs The reads, the wait's outcome, and who made the pick.
+ * @returns The verdict.
+ */
+export function decideCharacterVerdict(obs: CharacterVerdictObservation): CharacterVerdict {
+  const who = obs.request.token;
+
+  if (obs.before === null) {
+    return {
+      ok: false,
+      stage: 'characterVerify',
+      rosterKey: 'selectedNow',
+      message:
+        `The world loaded, but which character entered could not be confirmed: ${obs.unreadableReason ?? 'the roster could not be read.'} ` +
+        'If the game was just killed, this can also be a process that is still listed but whose console ' +
+        'endpoint has already gone -- call game_enter again, which will then launch a fresh one. Otherwise ' +
+        'run console_run "character.list" to see what the server selects.',
+    };
+  }
+
+  if (obs.before.selectedIndex === -1) {
+    return {
+      ok: false,
+      stage: 'characterVerify',
+      rosterKey: 'selectedNow',
+      message:
+        'No character is selected on the server, so the client has nothing to enter as and is sitting on ' +
+        'the character-selection screen. The pick has to be in place before the game signs in, which is a ' +
+        `point this launch is already past. Call game_kill, then game_enter with character "${who}" again ` +
+        '-- that path makes the pick while the game is still booting.',
+    };
+  }
+
+  if (!rosterMatchesRequest(obs.request, obs.before)) {
+    const entered = obs.before.selected === null ? 'an unreported character' : obs.before.selected.characterClass;
+    return {
+      ok: false,
+      stage: 'characterVerify',
+      rosterKey: 'selectedNow',
+      message:
+        `The server selects ${entered}, not the ${who} that was asked for, and a pick made now would not ` +
+        'reach the client: it is read at sign-in, which this launch is past. Call game_kill, then ' +
+        `game_enter with character "${who}" again.`,
+    };
+  }
+
+  if (!obs.entered) {
+    return {
+      ok: false,
+      stage: 'characterEnter',
+      rosterKey: 'selectedNow',
+      message:
+        `The ${who} is selected on the server, but "${CHARACTER_ENTERED_MARKER}" never appeared in ` +
+        'sunrise.log, which means the client is still sitting on the character-selection screen rather ' +
+        `than having walked through it. The usual cause is "${HOLD_SETTING_KEY}" having been true in the ` +
+        "game's settings when this instance booted -- it is read once at startup. Call game_kill, then " +
+        'game_enter with the same character again; that path turns the flag off before launching.',
+    };
+  }
+
+  if (obs.after === null) {
+    return {
+      ok: false,
+      stage: 'characterVerify',
+      rosterKey: 'selectedNow',
+      message:
+        `The client left the character step, but the roster could not be re-read afterwards to confirm the ` +
+        `selection had not moved while it did: ${obs.unreadableReason ?? 'the roster could not be read.'} ` +
+        'Nothing is claimed about which character is in; run console_run "character.list" to see what the ' +
+        'server selects now.',
+    };
+  }
+
+  if (obs.after.selectedIndex !== obs.before.selectedIndex || !rosterMatchesRequest(obs.request, obs.after)) {
+    const now = obs.after.selected === null ? 'nobody' : obs.after.selected.characterClass;
+    return {
+      ok: false,
+      stage: 'characterVerify',
+      rosterKey: 'selectedNow',
+      message:
+        `The selection moved while the client was entering the world: the ${who} was selected before, and ` +
+        `the server selects ${now} now. Something other than this call is driving the server's console, so ` +
+        'which character the client actually entered as cannot be established from here. Call game_kill, ' +
+        `then game_enter with character "${who}" again with nothing else touching the game.`,
+    };
+  }
+
+  if (!obs.pickedByThisCall) {
+    return {
+      ok: true,
+      stage: 'characterVerify',
+      rosterKey: 'selectedNow',
+      message:
+        `The game was already in the world and the server selects the ${who}. This call made no pick and ` +
+        'cannot confirm the client entered as that character: the two facts it has are that the client left ' +
+        'the character sign-in step at some earlier point in this boot, and that the roster reads this way ' +
+        'now, and nothing ties those two moments together -- a selection changed after sign-in looks ' +
+        'identical from here. Call game_kill, then game_enter with the same character, if you need that ' +
+        'guaranteed.',
+      unverified:
+        'This call did not make the pick. The entered-marker is somewhere earlier in this boot and both ' +
+        'roster reads happened after it, so nothing here is evidence about what the client signed in as.',
+    };
+  }
+
+  return {
+    ok: true,
+    stage: 'characterVerify',
+    rosterKey: 'entered',
+    message: `The game entered the world as the ${who}.`,
+    verifiedBy:
+      `This call made the pick; sunrise.log then recorded "${CHARACTER_ENTERED_MARKER}" after it (the client ` +
+      'only leaves that step once a character is chosen), and the server reported this character selected ' +
+      'both before and after that moment. The client\'s own character object was not re-read.',
+  };
+}

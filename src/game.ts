@@ -225,23 +225,47 @@ function runTaskkill(): Promise<KillResult> {
  * "no such process" as a clean, non-error outcome.
  *
  * The wait is what makes this tool's answer mean what it says -- see `waitForGameToExit`. A process
- * that is still there at the deadline is still reported as `killed` (the kill was accepted; only
- * the waiting ran out), but the message says so rather than leaving the caller to find out through
- * some other tool's confusing answer.
+ * still listed at the deadline comes back `failed`, because `killed` is what a caller switches on to
+ * decide the game is gone, and the message distinguishes "accepted but not finished exiting" from
+ * "the kill was refused".
  */
 export async function killGame(): Promise<KillResult> {
   const result = await runTaskkill();
   if (result.status !== 'killed') return result;
-  const gone = await waitForGameToExit(getGameProcessInfo);
-  return gone
-    ? { status: 'killed', message: `${result.message} The process is gone from the process table.` }
-    : {
-        status: 'killed',
-        message:
-          `${result.message} It was still listed by tasklist ${KILL_SETTLE_TIMEOUT_MS}ms later, so anything ` +
-          'that checks whether the game is running may still see it. Call this again, or check with tasklist, ' +
-          'before relying on the game being gone.',
-      };
+  return decideKillOutcome(result, await waitForGameToExit(getGameProcessInfo));
+}
+
+/**
+ * Turns "taskkill accepted it" plus "is it gone?" into the answer a caller switches on.
+ *
+ * Pure and exported so the one thing worth getting right here can be tested without Windows:
+ * `taskkill.exe` does not exist under WSL, so a test can never reach this through `killGame`, and
+ * the status mapping is exactly where the original defect would survive if it were got wrong.
+ *
+ * A process still listed at the deadline comes back **`failed`, not `killed`**. This tool's contract
+ * is that the game is gone when it returns; reporting the success value for the one outcome where
+ * that contract was not met would leave the defect alive at the boundary, and a caller doing
+ * `game_kill` then `game_enter` would walk straight into the stale-process branch the settle exists
+ * to prevent. The message distinguishes "accepted but not finished exiting" from "the kill was
+ * refused", so nobody reads it as taskkill having said no.
+ *
+ * @param accepted What `taskkill` itself reported.
+ * @param gone Whether the process was observed to leave the process table.
+ * @returns The outcome to report.
+ */
+export function decideKillOutcome(accepted: KillResult, gone: boolean): KillResult {
+  if (accepted.status !== 'killed') return accepted;
+  if (gone) {
+    return { status: 'killed', message: `${accepted.message} The process is gone from the process table.` };
+  }
+  return {
+    status: 'failed',
+    message:
+      `${accepted.message} It was still listed by tasklist ${KILL_SETTLE_TIMEOUT_MS}ms later. The termination ` +
+      'was accepted by Windows, so this is a process that has not finished exiting rather than a kill that ' +
+      'was refused -- but the game is not gone yet, and anything that checks whether it is running (game_enter ' +
+      'included) will still see it. Call game_kill again before relying on the game being gone.',
+  };
 }
 
 export interface LogReadResult {

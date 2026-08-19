@@ -45,6 +45,9 @@ import {
   CHARACTER_ENTERED_MARKER,
   HOLD_HOOK_MARKER,
   HOLD_SETTING_KEY,
+  SIGN_IN_MARKER,
+  decideCharacterStep,
+  decideCharacterVerdict,
   describeRoster,
   disableCharacterSelectHold,
   holdSettingBackupPath,
@@ -52,9 +55,10 @@ import {
   parseRoster,
   parseSelectAnswer,
   rewriteHoldCharacterSelect,
+  rosterIsReady,
 } from '../dist/character.js';
 import { waitForLogMarker } from '../dist/keys.js';
-import { waitForGameToExit } from '../dist/game.js';
+import { decideKillOutcome, waitForGameToExit } from '../dist/game.js';
 
 /** @type {{ name: string; ok: boolean; error?: string }[]} */
 const results = [];
@@ -78,7 +82,8 @@ async function test(name, fn) {
 /** The run that entered the world as the warlock (client.hold_character_select false, pick made
  *  before sign-in). Note there is no `stage=character_select` line at all: the hold hook is not
  *  installed when the flag is off, so it writes nothing. */
-const LOG_ENTERED = `client level=info t=31390 ev=retail site=3 text=world_controller:state_manager: Entering state 'character:signin' for reason 'unavailable'.
+const LOG_ENTERED = `client level=info t=15093 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:bap_signin' for reason 'unavailable'.
+client level=info t=31390 ev=retail site=3 text=world_controller:state_manager: Entering state 'character:signin' for reason 'unavailable'.
 client level=info t=31421 ev=retail site=26 text=world_controller:ui_stage: Substage goal changed from 'ENUM(26)' to 'ENUM(30)'.
 client level=info t=31515 ev=retail site=26 text=world_controller:ui_stage: Substage goal changed from 'ENUM(30)' to 'ENUM(31)'.
 client level=info t=31625 ev=retail site=26 text=world_controller:ui_stage: Substage goal changed from 'ENUM(31)' to 'ENUM(19)'.
@@ -279,6 +284,15 @@ async function main() {
       // and not the entering line.
       assert.ok(LOG_PARKED.includes("Entering state 'character:signin'"));
       assert.ok(LOG_ENTERED.includes("Entering state 'character:signin'"));
+
+      // The deadline marker is a real line too, and it lands long before the entered-marker. That
+      // ordering is the whole reason the pick is gated on it: once it is in the log, the account
+      // image the client is sent has already been built.
+      assert.equal(await waitForLogMarker(SIGN_IN_MARKER, 0, enteredLog), true);
+      assert.ok(
+        LOG_ENTERED.indexOf(SIGN_IN_MARKER) < LOG_ENTERED.indexOf(CHARACTER_ENTERED_MARKER),
+        'sign-in must precede the client leaving the character step, or the gate is guarding nothing',
+      );
     });
 
     await test('the hold-hook marker is present in the held run and absent when the flag was off', async () => {
@@ -388,6 +402,187 @@ async function main() {
     });
 
     // -----------------------------------------------------------------------
+    // The sequencing itself. This is the feature -- the pick is only correct in a window measured
+    // at about a second wide -- and until these existed nothing in this suite could fail if the
+    // pick were issued at the wrong moment, or not gated at all.
+    // -----------------------------------------------------------------------
+
+    await test('an empty roster is "not ready yet", not "this account owns nobody"', () => {
+      // The endpoint binds at t=125ms, long before the account is authored from settings, so the
+      // first answer that arrives is not necessarily a final one. Polling only until the socket
+      // answers -- rather than until the roster is loaded -- failed the whole call on a game that
+      // was a few hundred milliseconds early.
+      assert.equal(rosterIsReady(parseRoster(LIST_ROWS)), true);
+      assert.equal(rosterIsReady(null), false, 'an unreadable answer is not readiness');
+      const empty = parseRoster([{ key: 'count', value: 0 }, { key: 'selected_index', value: -1 }]);
+      assert.equal(empty.count, 0);
+      assert.equal(rosterIsReady(empty), false, 'an empty roster must keep the poll going, not end it');
+    });
+
+    await test('decideCharacterStep: the pick is only issued when sign-in provably has not started', () => {
+      // The case that was wrong: `proceed` is reached whenever the game runs, the world marker is
+      // absent, the pid is known and THIS server has no press record -- which is also exactly what a
+      // game a human or another agent already pressed Enter on, mid sign-in, looks like. A pick
+      // there reaches no client and still repoints every action the server resolves for it.
+      const table = [
+        { entry: 'launch', signInStarted: false, kind: 'pick' },
+        { entry: 'proceed', signInStarted: false, kind: 'pick' },
+        { entry: 'proceed', signInStarted: true, kind: 'refuseLatePick' },
+        { entry: 'launch', signInStarted: true, kind: 'refuseLatePick' },
+        { entry: 'shortCircuitOk', signInStarted: false, kind: 'verifyOnly' },
+        { entry: 'shortCircuitOk', signInStarted: true, kind: 'verifyOnly' },
+        { entry: 'resumeWorldWait', signInStarted: false, kind: 'verifyOnly' },
+        { entry: 'resumeWorldWait', signInStarted: true, kind: 'verifyOnly' },
+      ];
+      for (const row of table) {
+        const step = decideCharacterStep({ entry: row.entry, signInStarted: row.signInStarted });
+        assert.equal(
+          step.kind,
+          row.kind,
+          `entry=${row.entry} signInStarted=${row.signInStarted} should be ${row.kind}, got ${step.kind}`,
+        );
+      }
+      // The refusal has to tell an agent what happened and what to do, and say that nothing moved.
+      const refused = decideCharacterStep({ entry: 'proceed', signInStarted: true });
+      assert.ok(refused.reason.includes(SIGN_IN_MARKER), 'the refusal must quote the marker it read');
+      assert.match(refused.reason, /game_kill/);
+      assert.match(refused.reason, /nothing was changed/i);
+      assert.match(refused.reason, /Enter was not pressed/i);
+    });
+
+    await test('decideCharacterVerdict: the word "entered" is only used where this call can defend it', () => {
+      const warlock = { kind: 'class', token: 'warlock' };
+      const rosterFor = (index) => parseRoster(
+        LIST_ROWS.map((row) => {
+          if (row.key === 'selected_index') return { key: row.key, value: index };
+          if (/^selected_[0-9]+$/.test(row.key)) return { key: row.key, value: row.key === `selected_${index}` };
+          return row;
+        }),
+      );
+      const warlockRoster = rosterFor(2);
+      const titanRoster = rosterFor(1);
+      const noneRoster = parseRoster(
+        LIST_ROWS.map((row) =>
+          row.key === 'selected_index'
+            ? { key: row.key, value: -1 }
+            : /^selected_[0-9]+$/.test(row.key)
+              ? { key: row.key, value: false }
+              : row,
+        ),
+      );
+
+      // The one path that may say "entered": this call picked, and the selection was the requested
+      // one on both sides of the moment the client left the character step.
+      const verified = decideCharacterVerdict({
+        request: warlock, pickedByThisCall: true, before: warlockRoster, after: warlockRoster, entered: true,
+      });
+      assert.equal(verified.ok, true);
+      assert.equal(verified.rosterKey, 'entered');
+      assert.ok(verified.verifiedBy.includes('before and after'), 'the claim must name the bracket it rests on');
+      assert.equal(verified.unverified, undefined);
+
+      // THE REVIEW CASE, reachable with nothing exotic: console_run "character.select titan" against
+      // a game already in orbit as the warlock, then game_enter { character: "titan" }. Both facts
+      // are true and they are about different moments. It may answer ok; it may not call it entered
+      // and may not attach a verification claim.
+      const notPicked = decideCharacterVerdict({
+        request: { kind: 'class', token: 'titan' },
+        pickedByThisCall: false, before: titanRoster, after: titanRoster, entered: true,
+      });
+      assert.equal(notPicked.ok, true);
+      assert.equal(notPicked.rosterKey, 'selectedNow', 'a call that made no pick must not say "entered"');
+      assert.equal(notPicked.verifiedBy, undefined, 'and must attach no verification claim');
+      assert.ok(notPicked.unverified.length > 0, 'it must say why there is no claim');
+      assert.match(notPicked.message, /cannot confirm/i);
+
+      // A selection that moved across the entry is caught by the second read, not smoothed over.
+      const moved = decideCharacterVerdict({
+        request: warlock, pickedByThisCall: true, before: warlockRoster, after: titanRoster, entered: true,
+      });
+      assert.equal(moved.ok, false);
+      assert.equal(moved.stage, 'characterVerify');
+      assert.match(moved.message, /moved while the client was entering/i);
+
+      // The wrong character, nothing selected, and a client that never left the step.
+      const wrong = decideCharacterVerdict({
+        request: warlock, pickedByThisCall: false, before: titanRoster, after: titanRoster, entered: true,
+      });
+      assert.equal(wrong.ok, false);
+      assert.equal(wrong.rosterKey, 'selectedNow');
+      assert.match(wrong.message, /selects titan, not the warlock/);
+
+      const none = decideCharacterVerdict({
+        request: warlock, pickedByThisCall: false, before: noneRoster, after: noneRoster, entered: true,
+      });
+      assert.equal(none.ok, false);
+      assert.match(none.message, /No character is selected/);
+
+      const parked = decideCharacterVerdict({
+        request: warlock, pickedByThisCall: true, before: warlockRoster, after: warlockRoster, entered: false,
+      });
+      assert.equal(parked.ok, false);
+      assert.equal(parked.stage, 'characterEnter');
+      assert.ok(parked.message.includes(HOLD_SETTING_KEY));
+
+      // An unreadable roster on either side is never an ok.
+      const blindBefore = decideCharacterVerdict({
+        request: warlock, pickedByThisCall: true, before: null, after: null, entered: true,
+        unreadableReason: 'ECONNREFUSED',
+      });
+      assert.equal(blindBefore.ok, false);
+      assert.ok(blindBefore.message.includes('ECONNREFUSED'));
+      const blindAfter = decideCharacterVerdict({
+        request: warlock, pickedByThisCall: true, before: warlockRoster, after: null, entered: true,
+        unreadableReason: 'ECONNREFUSED',
+      });
+      assert.equal(blindAfter.ok, false);
+      assert.equal(blindAfter.rosterKey, 'selectedNow');
+      assert.match(blindAfter.message, /could not be re-read/i);
+
+      // No verdict of any kind may claim "entered" without a pick by this call.
+      for (const picked of [true, false]) {
+        for (const enteredMarker of [true, false]) {
+          const v = decideCharacterVerdict({
+            request: warlock, pickedByThisCall: picked, before: warlockRoster, after: warlockRoster,
+            entered: enteredMarker,
+          });
+          if (v.rosterKey === 'entered') {
+            assert.ok(picked && enteredMarker, 'rosterKey "entered" requires both a pick by this call and the marker');
+          }
+        }
+      }
+    });
+
+    await test('game_enter still issues the pick before the title wait and before the press', async () => {
+      // A pure decision table cannot notice the call sites being reordered, and the ordering IS the
+      // feature: the deadline was measured about one second after the key press, so a pick moved to
+      // after the title wait would still pass every other check in this file while losing the race
+      // on a fast boot. This reads the built server the way keys-smoke.mjs reads the .ps1 it parses,
+      // and it is deliberately narrow: it pins the order of four call sites, and claims nothing
+      // about what happens between them.
+      const built = await readFile(
+        path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js'),
+        'utf8',
+      );
+      const at = (needle, what) => {
+        const index = built.indexOf(needle);
+        assert.notEqual(index, -1, `dist/index.js no longer contains ${what} (${needle})`);
+        return index;
+      };
+      const signInGate = at('decideCharacterStep(', 'the sign-in gate');
+      const pick = at('`character.select ${', 'the character.select call');
+      const titleWait = at('waitForTitleScreen(', 'the title-screen wait');
+      const press = at('pressTitleScreenKey(', 'the key press');
+
+      assert.ok(signInGate < pick, 'the sign-in gate must be decided BEFORE the pick is issued');
+      assert.ok(pick < titleWait, 'the pick must be issued BEFORE the title-screen wait, not after it');
+      assert.ok(pick < press, 'the pick must be issued BEFORE Enter is pressed');
+      // And the roster must be read before the gate, since the gate is only sound once the endpoint
+      // has answered (that is what proves the log belongs to the running process).
+      assert.ok(at('waitForRoster(', 'the roster poll') < signInGate, 'the roster must be read before the gate');
+    });
+
+    // -----------------------------------------------------------------------
     // The kill settle, which the acceptance run found missing the hard way.
     // -----------------------------------------------------------------------
 
@@ -413,6 +608,24 @@ async function main() {
       const quick = performance.now();
       assert.equal(await waitForGameToExit(alreadyGone, 3000, 500), true);
       assert.ok(performance.now() - quick < 400, 'an already-dead game must not cost a poll interval');
+
+      // The status is the field a caller switches on, and reporting `killed` for a process that is
+      // still there would leave the whole defect alive at the boundary. taskkill.exe does not exist
+      // under WSL, so this mapping is only reachable as a pure function.
+      const accepted = { status: 'killed', message: 'SUCCESS: ... has been terminated.' };
+      const settled = decideKillOutcome(accepted, true);
+      assert.equal(settled.status, 'killed');
+      assert.match(settled.message, /gone from the process table/);
+
+      const stillThere = decideKillOutcome(accepted, false);
+      assert.equal(stillThere.status, 'failed', 'a process that outlived the settle must not report killed');
+      assert.match(stillThere.message, /accepted by Windows/, 'and must not read as taskkill having refused');
+      assert.match(stillThere.message, /game_kill again/);
+
+      // Nothing to kill is untouched by any of this.
+      const nothing = { status: 'notRunning', message: 'destiny2.exe was not running.' };
+      assert.deepEqual(decideKillOutcome(nothing, true), nothing);
+      assert.deepEqual(decideKillOutcome(nothing, false), nothing);
     });
 
     // -----------------------------------------------------------------------
@@ -453,6 +666,18 @@ async function main() {
         const run = tools.find((tool) => tool.name === 'console_run');
         assert.ok(run.description.includes('character.select'), 'console_run must name the console entry and its syntax');
         assert.match(run.description, /game_enter \{ character: "warlock" \}/);
+        // The class list in that description is built from CHARACTER_CLASSES rather than typed out,
+        // so this pins the tie: adding a class to the constant must reach the text an agent reads.
+        assert.ok(
+          run.description.includes(CHARACTER_CLASSES.join('|')),
+          `console_run must publish the class list as ${CHARACTER_CLASSES.join('|')}, built from CHARACTER_CLASSES`,
+        );
+
+        // game_kill's own description, not just the README: the settle is a behaviour change a
+        // caller has to know about, and the tool list is where it reads about behaviour.
+        const kill = tools.find((tool) => tool.name === 'game_kill');
+        assert.match(kill.description, /waits/i, 'game_kill must say that it waits for the process to be gone');
+        assert.match(kill.description, /failed/, 'and must document the status it returns when it is not');
 
         const describe = tools.find((tool) => tool.name === 'console_describe');
         assert.match(

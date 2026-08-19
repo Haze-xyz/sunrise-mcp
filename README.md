@@ -472,7 +472,7 @@ anywhere; a selection made at the character-select screen changes nothing the cl
 whole feature is a question of *when*, and that is exactly what an agent holding only a console line
 cannot get right.
 
-### The ordering, and why it is not the obvious one
+### The ordering, and why it is not the obvious one — and why it is also *gated*
 
 Measured on one launch, 2026-08-19, with the wall clock of the calling process and the client's own
 log timestamps side by side:
@@ -494,6 +494,27 @@ hand, answers about seven seconds *before* the title-screen marker, so `game_ent
 `character.list` until the endpoint comes up and makes the pick there, before it starts waiting for
 the title screen at all. That is the whole reason this is a `game_enter` argument and not advice in
 a help string.
+
+**Picking early is not enough; the pick is also refused when it cannot be shown to be in time.**
+`decideGameEnterAction` returns `proceed` whenever the game is running, the world marker is absent,
+the pid is known and *this server* holds no press record — and a game that a human or another agent
+already pressed Enter on, and which is halfway through sign-in, looks exactly like that from here.
+Issuing `character.select` there would reach no client and would still repoint every action the
+server resolves for it: `character_console.cpp` records that each one starts by finding the selected
+character, so a late pick moves equip, unequip, dismantle, socket plugs, item state and
+character-scoped acquisition at once, and one landing inside a client transaction makes that commit
+fail while the console still answers `ok`. So before the pick is issued, `game_enter` reads
+`sunrise.log` for `Entering state 'bootflow:bap_signin'` — the step that builds the first account
+image — and refuses at stage `characterSelect` if it is already there, pressing nothing and changing
+nothing. The read happens only *after* `character.list` has answered, because that answer is what
+proves the log belongs to the running process: `log::initialize` rotates the file at DLL load,
+before the endpoint binds. The decision itself is `decideCharacterStep` in `src/character.ts`, pure
+and driven by a case table.
+
+Measured live: with the game launched by `game_launch`, Enter pressed by a script running outside the
+MCP server (so no press record exists), and `bootflow:bap_signin` in the log, `game_enter { character:
+"warlock" }` refused in 0.2s and `console_run "character.list"` then reported `selected_index: -1` —
+nothing had been picked. Before this gate, that same call issued the pick.
 
 ### The settings flag, and why this tool writes a file you own
 
@@ -527,7 +548,29 @@ every call had to flip it again, and a crash between flip and restore would leav
 
 ### What "the warlock entered" is actually evidence of
 
-The response reports `requested` and `entered` side by side, and two things back the claim:
+The response reports `requested` and `entered` side by side **only where this call can defend the
+word `entered`** — which means it made the pick itself, and watched the client leave the character
+step *between two agreeing roster reads*. Everywhere else the roster is reported as `selectedNow`,
+which is all it is: a read taken at the moment of the report.
+
+That distinction is not pedantry. One roster read plus "the marker is somewhere in the log" are facts
+about two different moments, and pairing them is reachable without anything exotic: `console_run
+"character.select titan"` against a game already in orbit as the warlock, then `game_enter {
+character: "titan" }`. A single-read verdict answers `ok`, `entered: titan`, with a verification
+string attached — a confident wrong answer. So the ok path reads the roster **before** the log wait
+and **again after it**, and the verdict (`decideCharacterVerdict` in `src/character.ts`, pure and
+table-tested) says:
+
+- where this call made the pick and both reads agree, `entered`, with a `verifiedBy` that names the
+  bracket it rests on;
+- where the two reads disagree, a failure saying the selection moved while the client was entering,
+  which means something else is driving the server's console;
+- where this call made **no** pick — the two branches that find the game already in the world —
+  `selectedNow`, no verification claim at all, and an `unverified` field saying exactly why: the
+  marker is somewhere earlier in the boot and both reads happen after it, so nothing ties them to
+  sign-in.
+
+With that in place, two things back the `entered` claim:
 
 - `sunrise.log` carries `Leaving state 'character:signin'`. This is **not** `WORLD_LOADED_MARKER`:
   measured, `successfully changed world to: orbit_d2` is written about four seconds *before* the
@@ -535,7 +578,7 @@ The response reports `requested` and `entered` side by side, and two things back
   selection screen forever. Leaving that step is what does not happen without a selection — the
   control run with no pick posted the same UI substage `26 -> 30 -> 31` and stopped there, while the
   run with a pick crossed it in 334 ms.
-- `character.list` reports that character selected on the server.
+- `character.list` reports that character selected on the server, on both sides of that moment.
 
 What it does **not** do is re-read the client's own character object. The two were shown to agree for
 all three classes by opening the character sheet in the runs recorded in `task-select-report.md`;
@@ -549,7 +592,8 @@ nothing), `characterHold` (the settings flag could not be turned off, or *this* 
 hold hook attached — proven by `ev=bootflow stage=character_select result=ok` in the log, which is
 evidence about the running boot rather than about a file that may have changed since), `characterSelect`
 (the console refused the pick — an unknown class for this account, two characters sharing a class, an
-index past the roster — with the console's own summary and the account's roster quoted), `characterEnter`
+index past the roster — with the console's own summary and the account's roster quoted; **or this tool
+refused to make it**, because the game had already reached sign-in), `characterEnter`
 (the character is selected but the client never left the selection screen) and `characterVerify`
 (a different character is in, or the call arrived after sign-in and could not change anything).
 
@@ -568,6 +612,29 @@ console traffic cannot interleave between two calls either; and the `window` obj
 every path, including the new ones. `game_enter` with no `character` produces byte-identical
 responses to before.
 
+### Log rotation, and what these whole-file reads rest on
+
+Three of the reads this feature adds are whole-file rather than anchored to a byte offset, and that
+is sound rather than convenient: `sunrise.log` holds exactly one boot. `open_log_file` in the DLL's
+`core/logging/log.cpp` renames the previous file aside (`MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)`)
+and then opens the new one with `CREATE_ALWAYS`, which truncates even if that rename failed. Either
+alone would do; both run on every `log::initialize`, i.e. once per DLL load. This is read out of the
+source, not inferred from a `sunrise.log.old` lying around.
+
+The one thing it rests on is `core.logging.file_sink` being true. With the file sink off the DLL
+writes no file at all, so whatever is on disk is a previous boot's and *every* marker in `game_enter`
+— the title-screen and world-load ones included, long predating this feature — reads a stale file.
+That is a whole-tool precondition, not something these reads introduce.
+
+An older comment on the launch path said the opposite ("*if* the engine doesn't truncate that file"),
+and that was the one that was wrong. Its byte-offset anchor is kept anyway: it costs one `stat`, it
+is the only thing still standing if the file sink is ever turned off, and a redundant guard on the
+path that fires `SendInput` is worth more than the line it saves. Where an anchor is *not* usable —
+the hold-hook line is written ~3.5s into a boot, which can be before `launchGame` returns, so
+anchoring would miss it and let a held instance through — the whole-file read is the correct one. The
+sign-in gate needs neither: it is only read after `character.list` has answered, which is what proves
+the log belongs to the running process.
+
 ### One thing the acceptance run found on the way
 
 `game_kill` used to return as soon as `taskkill /F` did — which is when Windows has *accepted* the
@@ -579,6 +646,13 @@ no character asked for, that path returns a plain `ok` — so the sequence `game
 success without the game ever having restarted. `killGame` now waits for the process to leave the
 process table (bounded, 15s) and says so; `waitForGameToExit` is exported and takes its probe as a
 parameter so the loop can be tested without Windows.
+
+A process still listed when that wait runs out comes back **`failed`, not `killed`**. `status` is the
+field a caller switches on to decide the game is gone, so returning the success value for the one
+outcome where the tool's contract was not met would have left the original defect alive at the
+boundary. The message distinguishes "accepted by Windows but not finished exiting" from "the kill was
+refused", and `decideKillOutcome` is pure and exported, because `taskkill.exe` does not exist under
+WSL and that mapping is otherwise unreachable by any test.
 
 ## Building
 
@@ -907,11 +981,13 @@ foreground is not optional for this engine — see "What the 2026-08-18 re-measu
   cache survives the file's own write silently failing within one process's lifetime. See "Getting
   past the title screen" above.
 - `src/character.ts` — everything behind `game_enter`'s `character` argument that is not I/O against
-  the game: the argument parser, the two `character.*` console answers, the two log markers that say
-  what the client did with a pick, and the settings rewrite that decides whether it can act on one at
-  all. Split out for the same reason `game-enter-decision.ts` was — all of it is decidable from text,
-  so `scripts/character-smoke.mjs` can pin it with a table instead of a one-minute launch. See
-  "Entering the world as a named character" above.
+  the game: the argument parser, the two `character.*` console answers, the three log markers that
+  say what the client did with a pick and when it stopped being possible, the settings rewrite that
+  decides whether it can act on one at all, and the two decisions that are the feature —
+  `decideCharacterStep` (may the pick be issued at all?) and `decideCharacterVerdict` (what may be
+  claimed about who is in?). Split out for the same reason `game-enter-decision.ts` was: all of it is
+  decidable from text, so `scripts/character-smoke.mjs` can pin it with a case table instead of a
+  one-minute launch. See "Entering the world as a named character" above.
 - `src/serialize.ts` — `createSerializer`, the one-at-a-time call queue `game_enter` runs inside so
   two concurrent invocations cannot both observe "not pressed yet" and both press. Pure, no imports,
   tested by table in `scripts/game-enter-decision-smoke.mjs`.
@@ -932,9 +1008,13 @@ foreground is not optional for this engine — see "What the 2026-08-18 re-measu
   filesystem". Also run by `npm run test:keys`.
 - `scripts/character-smoke.mjs` — the test for `character.ts` plus the `game_kill` settle: the
   argument parser (including that nothing it accepts can carry a second console token), the two
-  console answers parsed from rows captured verbatim off the live endpoint, the two log markers
-  checked against real excerpts of a run that entered and a run that parked — both directions, since
-  the claim is that the marker separates them — the settings rewrite asserted byte-for-byte on
-  everything it must not touch, and a real MCP client over stdio reading `tools/list` to confirm the
-  `character` argument and its legal values are actually published. Also run by `npm run test:keys`.
+  console answers parsed from rows captured verbatim off the live endpoint, the log markers checked
+  against real excerpts of a run that entered and a run that parked — both directions, since the
+  claim is that the marker separates them — the settings rewrite asserted byte-for-byte on everything
+  it must not touch, case tables for `decideCharacterStep` and `decideCharacterVerdict` (the
+  sequencing and the verification claim, which are the feature), a source-order check on the built
+  server so the `character.select` call cannot be moved after the title wait or the key press while
+  every other check stays green, and a real MCP client over stdio reading `tools/list` to confirm the
+  `character` argument and its legal values are actually published. Also run by
+  `npm run test:keys`.
 - `scripts/smoke.mjs` — the live-game counterpart, described in "Testing against a live game".

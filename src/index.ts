@@ -28,11 +28,16 @@ import {
   CHARACTER_ENTERED_MARKER,
   HOLD_HOOK_MARKER,
   HOLD_SETTING_KEY,
+  SIGN_IN_MARKER,
+  decideCharacterStep,
+  decideCharacterVerdict,
   describeRoster,
   disableCharacterSelectHold,
   normalizeCharacterRequest,
   parseRoster,
   parseSelectAnswer,
+  rosterIsReady,
+  type GameEnterEntry,
   type HoldSettingResult,
   type ResolvedCharacterRequest,
   type Roster,
@@ -139,10 +144,17 @@ const CHARACTER_ENDPOINT_TIMEOUT_MS = 90_000;
 /** Gap between roster attempts while the endpoint is not up yet. */
 const CHARACTER_ENDPOINT_POLL_MS = 500;
 
-/** How long to wait for CHARACTER_ENTERED_MARKER. Measured 4s after the world-load marker on the
- *  2026-08-19 run; a client that has not left the character step within this has parked on it, which
- *  is what the failure at this stage says. */
+/** How long to wait for CHARACTER_ENTERED_MARKER after a press this call made. Measured 4s after the
+ *  world-load marker on the 2026-08-19 run; a client that has not left the character step within this
+ *  has parked on it, which is what the failure at this stage says. */
 const CHARACTER_ENTER_TIMEOUT_MS = 90_000;
+
+/** How long to wait for the same marker on a game that was *already* in the world when this call
+ *  arrived. Much shorter on purpose: the whole gap between the world-load marker and the client
+ *  leaving the character step was measured at about four seconds, and the read is whole-file, so a
+ *  marker still absent after this is one that is not coming. Ninety seconds there would be spent
+ *  re-deciding a question the roster read has usually already settled. */
+const CHARACTER_SETTLE_TIMEOUT_MS = 20_000;
 
 type RosterAttempt = { ok: true; roster: Roster } | { ok: false; message: string };
 
@@ -176,172 +188,171 @@ async function readRosterOnce(): Promise<RosterAttempt> {
 }
 
 /**
- * Polls `character.list` until the console endpoint answers it, which is also this tool's readiness
- * signal for "the pick can be made now". Deliberately not the title-screen marker: that arrives
- * about a second before the deadline for a pick (see character.ts), while the endpoint answers about
- * seven seconds before the marker itself.
+ * Polls `character.list` until the game answers it *with a loaded roster*, which is this tool's
+ * readiness signal for "the pick can be made now". Deliberately not the title-screen marker: that
+ * arrives about a second before the deadline for a pick (see character.ts), while the endpoint
+ * answers about seven seconds before the marker itself.
+ *
+ * **Readiness, not reachability.** An earlier version retried only on a thrown error, i.e. only
+ * while the socket itself could not be reached, and took the first answer it got as final. The
+ * endpoint binds very early in the boot -- `console_endpoint stage=listen` is at t=125ms -- and
+ * nothing says the account roster is loaded, or that the `character.*` entries have registered, by
+ * the time it will accept a connection. A `refused` with an empty roster, or an `unknownName` from
+ * the window before those entries register, would have failed the whole call on a game that was
+ * merely a few hundred milliseconds early. Every not-ok answer is retried on the same schedule as an
+ * unreachable socket, and the last one seen is what the timeout reports, so a genuinely old DLL
+ * still ends up saying exactly what is wrong with it rather than being hidden behind a generic
+ * timeout.
  *
  * @param timeoutMs How long to keep trying.
  * @returns The roster, or the reason it could not be read.
  */
 async function waitForRoster(timeoutMs: number): Promise<RosterAttempt> {
   const deadline = Date.now() + timeoutMs;
-  let lastError = 'the endpoint was never reached';
+  let lastReason = 'the endpoint was never reached';
   for (;;) {
     try {
-      return await readRosterOnce();
+      const attempt = await readRosterOnce();
+      // A roster with no characters is a roster that has not been built yet: the account is
+      // authored from settings during startup, so an empty one this early says "not ready", not
+      // "this account owns nobody". The console's own refusal for a genuinely empty account is what
+      // the timeout below ends up reporting.
+      if (attempt.ok && rosterIsReady(attempt.roster)) return attempt;
+      lastReason = attempt.ok ? 'character.list answered ok with an empty roster' : attempt.message;
     } catch (err) {
-      lastError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      lastReason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     }
     if (Date.now() >= deadline) {
       return {
         ok: false,
         message:
-          `The game's console endpoint did not answer character.list within ${timeoutMs}ms, so no ` +
-          `character could be chosen (last error: ${lastError}). The game may have failed to load ` +
-          'the Sunrise DLL; check log_read.',
+          `The game's console endpoint did not answer character.list with a loaded roster within ` +
+          `${timeoutMs}ms, so no character could be chosen (last answer: ${lastReason}). The game may ` +
+          'have failed to load the Sunrise DLL; check log_read.',
       };
     }
     await sleep(Math.min(CHARACTER_ENDPOINT_POLL_MS, Math.max(deadline - Date.now(), 0)));
   }
 }
 
-/** What the caller asked for and what the roster says about it, as the `character` object every
- *  response carrying this argument gets. */
+/**
+ * What the caller asked for and what the roster says about it, as the `character` object every
+ * response carrying this argument gets.
+ *
+ * `rosterKey` is not cosmetic. `entered` is a claim about what the client signed in as, and it is
+ * only defensible where this call made the pick and watched the client leave the character step
+ * between two agreeing roster reads -- `decideCharacterVerdict` is what decides that, and it hands
+ * the key down. Everywhere else the roster is reported as `selectedNow`, which is all it is: a read
+ * taken at the moment of the report. Before this distinction existed, a *failed* launch could report
+ * `entered: {class: "hunter"}` from the roster read before the pick was even made.
+ */
 function characterReport(
   request: ResolvedCharacterRequest,
   picked: SelectAnswer | null,
   roster: Roster | null,
+  rosterKey: 'entered' | 'selectedNow' = 'selectedNow',
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
+  const selectedEntry =
+    roster !== null && roster.selected !== null
+      ? { index: roster.selected.index, class: roster.selected.characterClass, soid: roster.selected.soid }
+      : null;
   return {
     requested: request.token,
     ...(picked !== null
       ? { selected: { index: picked.index, class: picked.characterClass, soid: picked.soid, changed: picked.changed } }
       : {}),
-    ...(roster !== null
-      ? {
-          entered:
-            roster.selected !== null
-              ? { index: roster.selected.index, class: roster.selected.characterClass, soid: roster.selected.soid }
-              : null,
-          roster: describeRoster(roster),
-        }
-      : {}),
+    ...(roster !== null ? { [rosterKey]: selectedEntry, roster: describeRoster(roster) } : {}),
     ...extra,
   };
 }
 
-/** Whether the roster's selected character is the one `request` named. */
-function rosterMatchesRequest(request: ResolvedCharacterRequest, roster: Roster): boolean {
-  if (roster.selected === null) return false;
-  return request.kind === 'class'
-    ? roster.selected.characterClass === request.token
-    : roster.selected.index === request.index;
-}
-
-type CharacterVerdict =
-  | { ok: true; character: Record<string, unknown> }
+type CharacterVerdictResult =
+  | { ok: true; character: Record<string, unknown>; message: string }
   | { ok: false; stage: string; message: string; character: Record<string, unknown> };
 
 /**
- * Answers "did the character the caller asked for actually enter the world?" from the two things
- * this server can honestly observe: the client leaving the character sign-in boot step (a step it
- * does not leave without a selection -- see CHARACTER_ENTERED_MARKER), and the roster the server
- * itself holds while that happened.
+ * Answers "which character is in?" from two roster reads bracketing the log wait, and hands the
+ * decision itself to `decideCharacterVerdict` in character.ts, which is pure and table-tested.
  *
- * The order is cheap-and-decisive first. A roster that never had a selection, or has the wrong one,
- * settles the question immediately and without waiting; only a roster that agrees is worth spending
- * the log wait on. That is what keeps a call against a game already parked on the select screen from
- * burning CHARACTER_ENTER_TIMEOUT_MS to reach a conclusion the roster already gave.
- *
- * **What this does not prove.** It reads the *server's* selection, not the client's own character
- * object; the two were shown to agree on all three classes by opening the character sheet in the
- * runs recorded in task-select-report.md, but nothing here re-reads that sheet. The claim it makes
- * is exactly: the client left the character step, and the character State selected at that point was
- * the one asked for.
+ * The order here is cheap-and-decisive first: a roster that never had a selection, or has the wrong
+ * one, settles the question with no wait at all, so a call against a game already parked on the
+ * selection screen fails in a fifth of a second rather than after the full timeout. Only a roster
+ * that agrees is worth spending the log wait on -- and then the roster is read a second time, so the
+ * ok path can say the selection held on both sides of the moment the client left the step instead of
+ * pairing one read with a marker from an unrelated moment.
  *
  * @param request What the caller named.
  * @param picked What character.select answered, when this call made the pick.
+ * @param pickedByThisCall Whether the entered-marker can be attributed to this call at all.
  * @param logPath sunrise.log.
  * @param sinceOffset Byte offset the entered-marker must appear at or after.
  * @param timeoutMs How long to wait for that marker.
- * @returns The verdict, always carrying the character report so a caller sees requested vs entered
- *          on every path.
+ * @returns The verdict, always carrying the character report so a caller sees requested vs found on
+ *          every path.
  */
 async function verifyCharacterEntered(
   request: ResolvedCharacterRequest,
   picked: SelectAnswer | null,
+  pickedByThisCall: boolean,
   logPath: string,
   sinceOffset: number,
   timeoutMs: number,
-): Promise<CharacterVerdict> {
-  const attempt = await waitForRoster(CHARACTER_ENDPOINT_POLL_MS * 4);
-  if (!attempt.ok) {
-    return {
-      ok: false,
-      stage: 'characterVerify',
-      message:
-        `The world loaded, but which character entered could not be confirmed: ${attempt.message} If the game ` +
-        'was just killed, this can also be a process that is still listed but whose console endpoint has already ' +
-        'gone -- call game_enter again, which will then launch a fresh one. Otherwise run console_run ' +
-        '"character.list" to see what the server selects.',
-      character: characterReport(request, picked, null),
-    };
-  }
-  const roster = attempt.roster;
+): Promise<CharacterVerdictResult> {
+  const readRoster = async (): Promise<{ roster: Roster | null; reason?: string }> => {
+    const attempt = await waitForRoster(CHARACTER_ENDPOINT_POLL_MS * 4);
+    return attempt.ok ? { roster: attempt.roster } : { roster: null, reason: attempt.message };
+  };
 
-  if (roster.selectedIndex === -1) {
+  const first = await readRoster();
+  // Decided once on the "before" read, so a hopeless case costs nothing; the same function is asked
+  // again below with the full observation once the wait has run.
+  const early = decideCharacterVerdict({
+    request,
+    pickedByThisCall,
+    before: first.roster,
+    after: first.roster,
+    entered: true,
+    ...(first.reason !== undefined ? { unreadableReason: first.reason } : {}),
+  });
+  if (!early.ok && early.stage === 'characterVerify' && early.rosterKey === 'selectedNow' && first.roster !== null) {
+    // A "before" read that already disagrees (nothing selected, or the wrong character) is final.
     return {
       ok: false,
-      stage: 'characterVerify',
-      message:
-        'No character is selected on the server, so the client has nothing to enter as and is ' +
-        'sitting on the character-selection screen. The pick has to be in place before the game ' +
-        'signs in, which is a point this launch is already past. Call game_kill, then game_enter ' +
-        `with character "${request.token}" again -- that path makes the pick while the game is ` +
-        'still booting.',
-      character: characterReport(request, picked, roster),
+      stage: early.stage,
+      message: early.message,
+      character: characterReport(request, picked, first.roster, early.rosterKey),
     };
   }
-  if (!rosterMatchesRequest(request, roster)) {
-    const entered = roster.selected === null ? 'an unreported character' : roster.selected.characterClass;
+  if (first.roster === null) {
     return {
       ok: false,
-      stage: 'characterVerify',
-      message:
-        `The server selects ${entered}, not the ${request.token} that was asked for, and a pick made ` +
-        'now would not reach the client: it is read at sign-in, which this launch is past. Call ' +
-        `game_kill, then game_enter with character "${request.token}" again.`,
-      character: characterReport(request, picked, roster),
+      stage: early.stage,
+      message: early.message,
+      character: characterReport(request, picked, null, early.rosterKey),
     };
   }
 
   const entered = await waitForLogMarker(CHARACTER_ENTERED_MARKER, timeoutMs, logPath, sinceOffset);
-  if (!entered) {
-    return {
-      ok: false,
-      stage: 'characterEnter',
-      message:
-        `The ${request.token} is selected on the server, but "${CHARACTER_ENTERED_MARKER}" never ` +
-        `appeared in sunrise.log within ${timeoutMs}ms, which means the client is still sitting on ` +
-        'the character-selection screen rather than having walked through it. The usual cause is ' +
-        `"${HOLD_SETTING_KEY}" having been true in the game's settings when this instance booted -- ` +
-        'it is read once at startup. Call game_kill, then game_enter with the same character again; ' +
-        'that path turns the flag off before launching.',
-      character: characterReport(request, picked, roster),
-    };
-  }
+  const second = entered ? await readRoster() : { roster: null as Roster | null };
+  const verdict = decideCharacterVerdict({
+    request,
+    pickedByThisCall,
+    before: first.roster,
+    after: second.roster,
+    entered,
+    ...(second.reason !== undefined ? { unreadableReason: second.reason } : {}),
+  });
 
-  return {
-    ok: true,
-    character: characterReport(request, picked, roster, {
-      verifiedBy:
-        `sunrise.log carries "${CHARACTER_ENTERED_MARKER}" (the client only leaves that step once a ` +
-        'character is chosen) and the server reports this character selected. The client\'s own ' +
-        'character object was not re-read.',
-    }),
+  const roster = second.roster ?? first.roster;
+  const extra = {
+    ...(verdict.verifiedBy !== undefined ? { verifiedBy: verdict.verifiedBy } : {}),
+    ...(verdict.unverified !== undefined ? { unverified: verdict.unverified } : {}),
   };
+  const character = characterReport(request, picked, roster, verdict.rosterKey, extra);
+  return verdict.ok
+    ? { ok: true, character, message: verdict.message }
+    : { ok: false, stage: verdict.stage, message: verdict.message, character };
 }
 
 const server = new McpServer({ name: 'sunrise-mcp', version: '0.1.0' });
@@ -360,7 +371,7 @@ server.registerTool(
       'the arguments a command takes, so what follows is both what an agent needs before deciding what to try and, ' +
       'for these entries, the argument syntax describe does not carry. character.list takes no argument and reports ' +
       'the account\'s characters with their class, key and which one is selected; character.select ' +
-      '<titan|hunter|warlock, or an index into character.list> moves the server\'s selection. Do not choose a ' +
+      `<${CHARACTER_CLASSES.join('|')}, or an index into character.list> moves the server's selection. Do not choose a ` +
       'character from here unless you mean to: character.select answers ok whenever it is called, but only reaches ' +
       'the game when it is called before the game signs in, and owning that ordering is exactly what game_enter\'s ' +
       'character argument is for -- to start the game as a character, call game_enter { character: "warlock" }. ' +
@@ -435,8 +446,14 @@ server.registerTool(
   'game_kill',
   {
     description:
-      'Force-terminates destiny2.exe via `taskkill /IM destiny2.exe /F`. Safe to call even if the game is not ' +
-      'currently running.',
+      'Force-terminates destiny2.exe via `taskkill /IM destiny2.exe /F`, then waits (up to 15s) for the process ' +
+      'to actually leave the process table before returning, so that a call made right after this one does not ' +
+      'still see the game running. taskkill returns when Windows has accepted the termination, not when it has ' +
+      'happened, and without the wait `game_kill` followed immediately by `game_enter` could report success ' +
+      'against a process that had not restarted. Returns killed once it is gone, notRunning if there was nothing ' +
+      'to kill (safe to call either way), and failed if it was still listed when the wait ran out -- that last ' +
+      'one means the kill was accepted but the process has not finished exiting, so call it again rather than ' +
+      'treating the game as gone.',
   },
   async (): Promise<CallToolResult> => {
     expectDisconnectBriefly();
@@ -483,7 +500,10 @@ server.registerTool(
       'as that character, and this tool owns the ordering that makes that work, which a caller driving console_run ' +
       'by hand would get wrong: the choice has to be in place before the game signs in, and that deadline was ' +
       'measured at about one second after the title screen appears, so the pick goes in as soon as the game\'s ' +
-      'console endpoint answers (about seven seconds earlier) rather than at the title screen. The steps: ' +
+      'console endpoint answers (about seven seconds earlier) rather than at the title screen. It also refuses to ' +
+      'make a pick it cannot show is in time -- if the log says this game has already reached sign-in (which is ' +
+      'what a game somebody else already pressed Enter on looks like from here) it changes nothing and says so, ' +
+      'because a late pick reaches no client and still repoints every action the server resolves for it. The steps: ' +
       'launches destiny2.exe if it is not already running, waits for sunrise.log\'s ' +
       `"${TITLE_SCREEN_MARKER}" line (the earliest reliable readiness signal -- game_launch itself returns ` +
       'roughly 40s before the title screen can actually accept input, so calling console_run or pressing a key ' +
@@ -514,16 +534,21 @@ server.registerTool(
       'writable) it refuses without launching and says what to edit. After the world loads it confirms which ' +
       'character actually entered rather than only that something did, and reports requested and entered side by ' +
       'side in a character object: the evidence is sunrise.log recording that the client left the character ' +
-      'sign-in step, which it does not do without a selection, plus the server reporting that character selected ' +
-      '-- the client\'s own character object is not re-read. And a pick that would land too late is refused ' +
+      'sign-in step after this call made the pick, which it does not do without a selection, plus the server ' +
+      'reporting that character selected on both sides of that moment -- the client\'s own character object is ' +
+      'not re-read. Where this call did NOT make the pick (the game was already in the world when it arrived) it ' +
+      'reports the roster as selectedNow rather than entered and carries an unverified field saying why: the ' +
+      'marker is somewhere earlier in the boot and the roster is read now, and nothing ties the two moments ' +
+      'together. And a pick that would land too late is refused ' +
       'rather than reported as success: called against a game that is already past sign-in, it tells you which ' +
       'character that game actually entered as and, if it is the wrong one, that game_kill followed by this same ' +
       'call is the way to change it. On ' +
       'failure, the response names which stage it stopped at (launch, titleScreen, keyPress, worldLoad, ambiguous, ' +
       'or -- only when a character was asked for -- character for a name that is not a class, characterHold for the ' +
-      'settings flag, characterSelect for a pick the game refused, characterEnter for a client that stayed on the ' +
-      'selection screen, characterVerify for a different character than the one asked for) so a caller knows what ' +
-      'actually went wrong rather than just that something did.',
+      'settings flag, characterSelect for a pick the game refused or one this tool refused to make because the ' +
+      'game was already past sign-in, characterEnter for a client that stayed on the selection screen, ' +
+      'characterVerify for a different character than the one asked for) so a caller knows what actually went ' +
+      'wrong rather than just that something did.',
     inputSchema: {
       character: z
         .string()
@@ -621,18 +646,15 @@ server.registerTool(
           }
           // A world has already loaded, so the pick this call would make could not reach the client
           // -- it is read at sign-in, which is behind us. The honest answer is not "ok, nothing to
-          // press" but "here is who is actually in, and whether it is who you asked for". Whole-file
-          // offset: the log is this boot's (the engine rotates it to sunrise.log.old on start), and
-          // there is no press in this call to attribute a marker to.
+          // press" but "here is who the server selects, and whether it is who you asked for".
+          // pickedByThisCall is false, so the verdict reports selectedNow rather than entered and
+          // says why: the entered-marker is somewhere earlier in this boot and both roster reads
+          // happen after it. Whole-file offset for the same reason -- there is no press in this call
+          // to attribute a marker to. See character.ts on why one boot is all the file holds.
           stage = 'characterVerify';
-          const verdict = await verifyCharacterEntered(request, null, logPath, 0, CHARACTER_ENTER_TIMEOUT_MS);
+          const verdict = await verifyCharacterEntered(request, null, false, logPath, 0, CHARACTER_SETTLE_TIMEOUT_MS);
           if (!verdict.ok) return fail(verdict.stage, verdict.message, { character: verdict.character });
-          return textResult({
-            status: 'ok',
-            character: verdict.character,
-            message:
-              `The game was already in the world as the ${request.token}; nothing was pressed and no pick was made.`,
-          });
+          return textResult({ status: 'ok', character: verdict.character, message: verdict.message });
         }
 
         case 'resumeWorldWait': {
@@ -652,17 +674,14 @@ server.registerTool(
           }
           if (request !== null) {
             // Enter was already pressed for this pid, so sign-in has happened or is happening and a
-            // pick made now is too late. Report who actually got in rather than claiming success.
+            // pick made now is too late. Report who the server selects rather than claiming success,
+            // and -- pickedByThisCall false -- without calling it "entered": this call did not make
+            // the pick, so it has nothing tying the roster it reads to the moment the client signed
+            // in.
             stage = 'characterVerify';
-            const verdict = await verifyCharacterEntered(request, null, logPath, 0, CHARACTER_ENTER_TIMEOUT_MS);
+            const verdict = await verifyCharacterEntered(request, null, false, logPath, 0, CHARACTER_SETTLE_TIMEOUT_MS);
             if (!verdict.ok) return fail(verdict.stage, verdict.message, { character: verdict.character });
-            return textResult({
-              status: 'ok',
-              character: verdict.character,
-              message:
-                `The game entered the world as the ${request.token} (Enter had already been pressed for this game ` +
-                'process, so nothing was pressed and no pick was made by this call).',
-            });
+            return textResult({ status: 'ok', character: verdict.character, message: verdict.message });
           }
           return textResult({
             status: 'ok',
@@ -690,11 +709,14 @@ server.registerTool(
           // below -- that record is the only thing that later stops a retry from re-pressing.
           currentPid = launch.pid ?? (await getGameProcessInfo()).pid;
           // launchGame() kills any existing process and starts a new one, but reuses the same
-          // sunrise.log path. If the engine doesn't truncate that file on a fresh start, whatever
-          // the previous process already wrote (including a stale TITLE_SCREEN_MARKER or even
-          // WORLD_LOADED_MARKER) is still sitting in it. Anchoring to the log's size right after
-          // this launch means only a marker THIS new process actually writes can satisfy the wait
-          // below.
+          // sunrise.log path. It has since been read out of the DLL that the engine does replace
+          // that file on a fresh start -- log.cpp's open_log_file renames the old one aside and then
+          // opens with CREATE_ALWAYS, so it is truncated even when the rename fails -- so a stale
+          // TITLE_SCREEN_MARKER cannot in fact survive into this wait. The anchor is kept anyway: it
+          // costs one stat, it is the only thing still standing if the file sink is ever turned off
+          // (with core.logging.file_sink false the DLL writes no file at all and whatever is on disk
+          // is a previous boot's), and a redundant guard on the path that fires SendInput is worth
+          // more than the line it saves.
           titleWaitOffset = await currentLogSize(logPath);
           break;
         }
@@ -713,6 +735,27 @@ server.registerTool(
         stage = 'characterSelect';
         const rosterBefore = await waitForRoster(CHARACTER_ENDPOINT_TIMEOUT_MS);
         if (!rosterBefore.ok) return fail(stage, rosterBefore.message, settingsReport());
+
+        // The gate that makes "this tool owns the ordering" true rather than assumed. Reaching here
+        // on the proceed branch means only that the game is running, the world marker is absent and
+        // *this server* has no press record -- which is also exactly what a game a human or another
+        // agent already pressed Enter on, and which is already mid sign-in, looks like. A pick there
+        // reaches no client and still repoints every action the server resolves. Read only now,
+        // because character.list answering is what proves the log belongs to the running process:
+        // log::initialize rotates the file at DLL load, before the endpoint binds, so a marker in it
+        // is this boot's. See decideCharacterStep and SIGN_IN_MARKER in character.ts.
+        const signInStarted = await waitForLogMarker(SIGN_IN_MARKER, 0, logPath);
+        // Only launch and proceed reach here; the other three returned above. Written out rather
+        // than cast so the compiler keeps checking it if that ever stops being true.
+        const entry: GameEnterEntry = decision.kind === 'launch' ? 'launch' : 'proceed';
+        const step = decideCharacterStep({ entry, signInStarted });
+        if (step.kind === 'refuseLatePick') {
+          return fail(stage, step.reason, {
+            character: characterReport(request, null, rosterBefore.roster),
+            ...settingsReport(),
+          });
+        }
+
         const response = await endpoint.runLine(`character.select ${request.token}`);
         if (response.status !== 'ok') {
           return fail(
@@ -748,8 +791,11 @@ server.registerTool(
       // attaches, roughly 3.5s into a boot, so by the time the title-screen marker is in the log the
       // answer is settled -- and it is an observation of the boot that is actually running, which
       // re-reading settings.json is not (that file can have changed since this instance started).
-      // Whole-file, because the engine rotates sunrise.log to sunrise.log.old on start, so the file
-      // holds this boot and no other.
+      // Whole-file, and correctly so: sunrise.log holds exactly one boot (log.cpp's open_log_file
+      // renames the old one aside and then opens with CREATE_ALWAYS, which truncates even if that
+      // rename failed). An anchor is not usable here anyway -- this line is written ~3.5s into a
+      // boot, which can be before launchGame returns, so anchoring would miss it and let a held
+      // instance through. See character.ts's note on rotation for what that rests on.
       if (request !== null) {
         const holdAttached = await waitForLogMarker(HOLD_HOOK_MARKER, 0, logPath);
         if (holdAttached) {
@@ -832,6 +878,7 @@ server.registerTool(
         const verdict = await verifyCharacterEntered(
           request,
           picked,
+          true,
           logPath,
           preKeyPressOffset,
           CHARACTER_ENTER_TIMEOUT_MS,
@@ -850,7 +897,7 @@ server.registerTool(
           ...pressWindowReport(press),
           character: verdict.character,
           ...settingsReport(),
-          message: `The game entered the world as the ${request.token}.`,
+          message: verdict.message,
         });
       }
 
