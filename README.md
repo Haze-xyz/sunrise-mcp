@@ -14,6 +14,14 @@ layer for composing them into richer tools without touching the game's C++ at al
 
 ## Requirements & where it runs
 
+- **A Sunrise install built from the private Sunrise fork this repo pairs with** —
+  `Haze-xyz/Sunrise-build79433`, branch `layer2-entry` — not from upstream `stanuwu/Sunrise`.
+  Everything this server talks to — the console endpoint (the `127.0.0.1`-bound listener), the
+  `mem.*` primitives, `character.*`, forced-key input — is that fork's addition to the
+  `steam_api64.dll`; upstream Sunrise has none of it, so against a stock install nothing here
+  connects and every tool fails the same way (connection refused). You need the game with that
+  fork's DLL deployed — so access to that fork (or a DLL built from it) — before any of this is
+  useful.
 - Node ≥ 20.
 - The server must run on **whatever machine can reach the game's loopback socket** — and since
   Destiny 2 is Windows-only, that's Windows. This isn't a preference, it's what the endpoint is:
