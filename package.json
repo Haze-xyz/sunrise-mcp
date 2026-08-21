@@ -14,7 +14,8 @@
     "start": "node dist/index.js",
     "test:endpoint": "npm run build && node scripts/endpoint-smoke.mjs",
     "test:keys": "npm run build && node scripts/keys-smoke.mjs && node scripts/game-enter-decision-smoke.mjs && node scripts/character-smoke.mjs",
-    "smoke": "npm run build && node scripts/smoke.mjs"
+    "smoke": "npm run build && node scripts/smoke.mjs",
+    "test:capabilities": "npm run build && node scripts/mem-facade-smoke.mjs && node scripts/struct-read-smoke.mjs && node scripts/context-smoke.mjs && node scripts/register-smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

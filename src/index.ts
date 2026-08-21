@@ -59,6 +59,9 @@ import { getGameProcessInfo } from './tasklist.js';
 import { clearPressRecord, resolvePressedThisSession, writePressRecord, type PressRecord } from './press-record.js';
 import { createSerializer } from './serialize.js';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { CAPABILITIES } from './capabilities/index.js';
+import { buildContext } from './capabilities/context.js';
+import { registerCapabilities } from './capabilities/register.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -944,6 +947,11 @@ server.registerTool(
     }
   }),
 );
+
+// Enfichable capabilities: each console-composed tool registers itself here, so adding one is a
+// file plus a line in capabilities/index.ts -- never an edit to the tools above. See
+// docs/superpowers/specs/2026-08-21-sunrise-mcp-capabilities-plugin-design.md.
+registerCapabilities(server, buildContext(endpoint), CAPABILITIES);
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
