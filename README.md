@@ -85,6 +85,15 @@ as the C++ side grows). The behavior that isn't in a help string — forced-key 
 primitives' gates and blind spots, why `game_enter` owns its own ordering, the wire protocol
 itself — is in `NOTES.md`, not repeated here.
 
+> **Known limit — hands-free entry has no spawn.** `game_enter { character }` sets
+> `client.hold_character_select = false` so it can pick the character and get in without the
+> character screen. But entering that way lands the client in **orbit with no spawned body**:
+> `player.position` returns `present: false` and there is nothing in the world to drive. Measured
+> 2026-08-21 — a `game_enter { character: "warlock" }` reached orbit (`world_controller … falling
+> back to a new character`) with no local player. A spawned, moveable player still needs the real
+> character screen, which this path skips; `hold_character_select = false` also persists in the
+> settings file, so restore it to `true` afterward or a later normal launch enters broken too.
+
 ## Capabilities (the plugin layer)
 
 Beyond the six base tools, the server auto-registers **capabilities**: richer MCP tools built by
