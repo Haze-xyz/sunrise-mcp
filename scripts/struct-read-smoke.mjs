@@ -10,16 +10,15 @@ dv.setFloat32(8, 1.5, true);
 dv.setBigUint64(16, 0xdeadbeefcafebaben, true);
 dv.setInt8(24, -2);
 
-// 1) decodeStruct is pure: bytes + base + fields -> decoded values.
+// 1) decodeStruct is pure: bytes + fields -> decoded values.
 {
-  const base = 0x140000000n;
   const fields = [
     { name: 'a', offset: 0, type: 'u32' },
     { name: 'f', offset: 8, type: 'f32' },
     { name: 'p', offset: 16, type: 'ptr' },
     { name: 's', offset: 24, type: 'i8' },
   ];
-  const out = decodeStruct(buf, base, fields);
+  const out = decodeStruct(buf, fields);
   assert.equal(out.a, 0x11223344);
   assert.equal(out.f, 1.5);
   assert.equal(out.p, '0xDEADBEEFCAFEBABE');

@@ -33,8 +33,8 @@ function decodeField(dv: DataView, at: number, type: FieldType): number | string
   }
 }
 
-/** Pure: decode every field out of `bytes` (which starts at `base`). */
-export function decodeStruct(bytes: Uint8Array, base: bigint, fields: StructField[]): Record<string, number | string> {
+/** Pure: decode every field out of `bytes` (the span already read at the covering base). */
+export function decodeStruct(bytes: Uint8Array, fields: StructField[]): Record<string, number | string> {
   const minOffset = Math.min(...fields.map((f) => f.offset));
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const out: Record<string, number | string> = {};
@@ -44,8 +44,7 @@ export function decodeStruct(bytes: Uint8Array, base: bigint, fields: StructFiel
 
 /** Accepts "0x…" hex or plain decimal. */
 function parseAddress(text: string): bigint {
-  const trimmed = text.trim();
-  return trimmed.toLowerCase().startsWith('0x') ? BigInt(trimmed) : BigInt(trimmed);
+  return BigInt(text.trim());
 }
 
 export const structReadCapability: Capability = {
@@ -80,8 +79,12 @@ export const structReadCapability: Capability = {
       const minOffset = Math.min(...fields.map((f) => f.offset));
       const maxEnd = Math.max(...fields.map((f) => f.offset + SIZES[f.type]));
       const bytes = await ctx.mem.read(address + BigInt(minOffset), maxEnd - minOffset);
-      const decoded = decodeStruct(bytes, address + BigInt(minOffset), fields);
-      const text = JSON.stringify({ address: `0x${address.toString(16).toUpperCase()}`, fields: decoded }, null, 2);
+      const decoded = decodeStruct(bytes, fields);
+      const text = JSON.stringify(
+        { address: `0x${address.toString(16).toUpperCase().padStart(16, '0')}`, fields: decoded },
+        null,
+        2,
+      );
       return { content: [{ type: 'text', text }] };
     } catch (err) {
       const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);

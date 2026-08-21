@@ -70,4 +70,36 @@ function fakeConsole() {
   await assert.rejects(() => mem.read(0x1000n, 16), /only 8 of 16 bytes readable/);
 }
 
+// 4) Rows arriving in descending line-address order still reassemble correctly: this exercises
+// the sort in reassemble(), which the other fakes (ascending by construction) never touch.
+{
+  const con = {
+    describe: async () => ({ id: 1, status: 'ok', entries: [] }),
+    runLine: async (line) => {
+      const m = /^mem\.read (\d+) (\d+)$/.exec(line);
+      assert.ok(m, `unexpected line: ${line}`);
+      const start = BigInt(m[1]);
+      const count = Number(m[2]);
+      const rows = [];
+      for (let lineOff = 0; lineOff < count; lineOff += 16) {
+        const lineAddr = start + BigInt(lineOff);
+        const n = Math.min(16, count - lineOff);
+        const pairs = [];
+        for (let i = 0; i < n; i++) {
+          const b = Number((lineAddr + BigInt(i)) & 0xffn);
+          pairs.push(b.toString(16).toUpperCase().padStart(2, '0'));
+        }
+        rows.push({ key: lineAddr.toString(16).toUpperCase().padStart(16, '0'), value: pairs.join(' ') });
+      }
+      rows.reverse(); // Serve the same rows, but in descending line-address order.
+      return { id: 1, status: 'ok', summary: '', rows };
+    },
+  };
+  const mem = createMemFacade(con);
+  const base = 0x140000000n;
+  const bytes = await mem.read(base, 40);
+  assert.equal(bytes.length, 40);
+  for (let i = 0; i < 40; i++) assert.equal(bytes[i], Number((base + BigInt(i)) & 0xffn), `byte ${i}`);
+}
+
 console.log('mem-facade-smoke: OK');
