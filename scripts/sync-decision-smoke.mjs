@@ -140,15 +140,23 @@ async function main() {
     });
   }
 
-  await test('only upToDate is silent; every other outcome reaches a human', () => {
+  await test('a message is sent only when the run needs a human', () => {
+    // Nothing to do and it worked are both silent: the Actions history already carries green/red,
+    // and a channel used for "nothing happened" stops being read.
+    const silent = new Set(['upToDate', 'ready']);
     for (const testCase of CASES) {
       const outcome = decideSyncOutcome({ ...base, ...testCase.observation });
-      assert.equal(
-        shouldNotify(outcome),
-        outcome.kind !== 'upToDate',
-        `${outcome.kind} notified wrongly`,
-      );
+      assert.equal(shouldNotify(outcome), !silent.has(outcome.kind), `${outcome.kind} notified wrongly`);
     }
+  });
+
+  await test('an unbuilt merge still notifies, because it is the success that is not one', () => {
+    // On the scheduled job this can only mean MSBuild went missing from the runner: the merge is
+    // published-shaped but was never compiled, and silence there is how a build quietly stops being
+    // proof of anything.
+    const outcome = decideSyncOutcome({ ...base, upstreamCommitsAhead: 43, mergeAttempted: true });
+    assert.equal(outcome.kind, 'mergedNotBuilt');
+    assert.equal(shouldNotify(outcome), true);
   });
 
   await test('only ready may be published', () => {

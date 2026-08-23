@@ -95,14 +95,20 @@ It fetches upstream, merges **in a throwaway worktree**, builds with MSBuild, an
 onto the result only when the build is green. It never resolves a conflict, and a failed run leaves
 your checkout exactly as it found it.
 
-| Outcome | What it means | Exit |
-|---|---|---|
-| `upToDate` | nothing upstream — the only silent outcome | 0 |
-| `dirty` | you have uncommitted changes, so nothing was touched | 1 |
-| `conflict` | the conflicting files are named; nothing was published | 1 |
-| `buildFailed` | merged cleanly, does not compile; nothing was published | 1 |
-| `mergedNotBuilt` | merged cleanly, no build run, so unproven | 0 |
-| `ready` | merged cleanly and compiles | 0 |
+| Outcome | What it means | Exit | Pings |
+|---|---|---|---|
+| `upToDate` | nothing upstream | 0 | — |
+| `ready` | merged cleanly and compiles | 0 | — |
+| `mergedNotBuilt` | merged cleanly, no build run, so unproven | 0 | yes |
+| `dirty` | you have uncommitted changes, so nothing was touched | 1 | yes |
+| `conflict` | the conflicting files are named; nothing was published | 1 | yes |
+| `buildFailed` | merged cleanly, does not compile; nothing was published | 1 | yes |
+
+A message is sent only when the run needs someone. The Actions history already carries green and
+red, and GitHub mails a failed run on its own; Telegram is for putting the *reason* in front of
+someone who is not looking at a dashboard. `mergedNotBuilt` pings despite exiting 0 — on the
+scheduled job it can only mean MSBuild went missing from the runner, so the build silently stopped
+being proof of anything.
 
 Flags: `--no-build`, `--no-publish`, `--push`, `--json`. With `TELEGRAM_BOT_TOKEN` and
 `TELEGRAM_CHAT_ID` set, the same summary is sent to Telegram; with neither, it says so and carries

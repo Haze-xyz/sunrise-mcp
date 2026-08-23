@@ -108,12 +108,21 @@ export function decideSyncOutcome(observation: SyncObservation): SyncOutcome {
 /**
  * Whether this outcome should reach a human.
  *
- * Only `upToDate` is silent. Every other outcome is either an action the reader wanted to know
- * happened, or a stop that needs them -- and a daily job that says nothing on the days it worked
- * is indistinguishable from a daily job that has been broken for a month.
+ * A message is sent only when the run needs someone: nothing to do and it worked are both silent.
+ *
+ * The obvious objection is that a job which says nothing on the days it worked cannot be told from
+ * one that has been broken for a month. What answers it is that this is not the only channel --
+ * every run leaves a green or red entry in the Actions history, and a failed one is mailed by
+ * GitHub on its own. Telegram is for the thing those two do not do well: putting the reason in
+ * front of someone who is not looking at a dashboard. Spending it on "nothing happened" is how it
+ * stops being read, which would cost more than the case it guards against.
+ *
+ * `mergedNotBuilt` does notify, and is the one that looks like a success. It means the result was
+ * never compiled -- which on the scheduled job can only happen if MSBuild went missing from the
+ * runner, i.e. the build stopped being proof and nobody would otherwise find out.
  */
 export function shouldNotify(outcome: SyncOutcome): boolean {
-  return outcome.kind !== 'upToDate';
+  return outcome.kind !== 'upToDate' && outcome.kind !== 'ready';
 }
 
 /** Whether the fork branch may be moved onto the merged result. Success only. */
