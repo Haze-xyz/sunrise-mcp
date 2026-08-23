@@ -38,6 +38,17 @@ const DEFAULT_UPSTREAM_BRANCH = 'master';
 /** Where a successful result is pushed, when pushing was asked for. */
 const DEFAULT_REMOTE = 'backup';
 /**
+ * How a push authenticates by default.
+ *
+ * On the machine this was written for, a plain push answers `Repository not found` whenever the
+ * wrong GitHub account is active, so the gh helper is asked for by name. On a CI runner there is no
+ * gh and no account: `actions/checkout` has already configured a token on the checkout, and forcing
+ * a helper that does not exist would break the one push that matters. Hence `null` -- meaning "do
+ * not inject anything, use whatever the checkout is already configured with" -- is a supported
+ * value, not an oversight.
+ */
+const DEFAULT_CREDENTIAL_HELPER = '!gh auth git-credential';
+/**
  * Where the fetched upstream tip is parked.
  *
  * NOT `FETCH_HEAD`: that ref is per worktree, so a tip fetched in the checkout is simply absent in
@@ -71,6 +82,8 @@ export interface SyncOptions {
   push?: boolean;
   /** Which remote to push to. */
   remote?: string;
+  /** Credential helper for the push. `null` uses the checkout's existing configuration (CI). */
+  credentialHelper?: string | null;
   log?: (line: string) => void;
 }
 
@@ -238,6 +251,8 @@ export async function runSync(options: SyncOptions): Promise<SyncRun> {
   const wantPublish = options.publish ?? true;
   const wantPush = options.push ?? false;
   const remote = options.remote ?? DEFAULT_REMOTE;
+  const credentialHelper =
+    options.credentialHelper === undefined ? DEFAULT_CREDENTIAL_HELPER : options.credentialHelper;
   const log = options.log ?? (() => {});
 
   const branchResult = await git(['rev-parse', '--abbrev-ref', 'HEAD'], forkDir);
@@ -346,10 +361,10 @@ export async function runSync(options: SyncOptions): Promise<SyncRun> {
       published = true;
       log(`${branch} moved to ${mergedCommit.slice(0, 7)}`);
       if (wantPush) {
-        const pushedResult = await git(
-          ['-c', 'credential.helper=!gh auth git-credential', 'push', remote, branch],
-          forkDir,
-        );
+        const pushArgs = credentialHelper === null
+          ? ['push', remote, branch]
+          : ['-c', `credential.helper=${credentialHelper}`, 'push', remote, branch];
+        const pushedResult = await git(pushArgs, forkDir);
         if (pushedResult.code !== 0) throw new Error(`push to ${remote} failed: ${pushedResult.stderr.trim()}`);
         pushed = true;
         log(`pushed to ${remote}`);

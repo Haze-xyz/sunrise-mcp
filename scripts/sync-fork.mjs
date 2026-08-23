@@ -31,6 +31,11 @@ function parseArgs(argv) {
     } else if (arg === '--no-build') args.build = false;
     else if (arg === '--no-publish') args.publish = false;
     else if (arg === '--push') args.push = true;
+    else if (arg === '--no-credential-helper') args.credentialHelper = null;
+    else if (arg === '--remote') {
+      args.remote = argv[index + 1];
+      index += 1;
+    }
     else if (arg === '--json') args.json = true;
     else if (arg === '--help' || arg === '-h') args.help = true;
     else throw new Error(`unknown argument: ${arg}`);
@@ -44,6 +49,11 @@ const USAGE = `usage: node scripts/sync-fork.mjs [--repo <path>] [--no-build] [-
   --no-build      merge only; the result is reported unproven rather than ready
   --no-publish    do not move the branch even when the build is green
   --push          push the branch after publishing (needs the right gh account active)
+  --remote <name> which remote to push to (default: backup)
+  --no-credential-helper
+                  do not force the gh credential helper on the push; use the checkout's own
+                  configuration instead. This is what a CI runner needs: actions/checkout has
+                  already put a token there, and gh is not installed.
   --json          print the run as JSON instead of a human summary`;
 
 async function main() {
@@ -70,6 +80,8 @@ async function main() {
     publish: args.publish,
     push: args.push,
     log,
+    ...(args.remote === undefined ? {} : { remote: args.remote }),
+    ...(args.credentialHelper === undefined ? {} : { credentialHelper: args.credentialHelper }),
   });
 
   const summary = summarize(result);

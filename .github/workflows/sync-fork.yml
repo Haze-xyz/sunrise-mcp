@@ -1,0 +1,90 @@
+# Keeps the Sunrise fork current with upstream, once a day, without anyone remembering to.
+#
+# Why this lives in sunrise-mcp and not in the fork: the fork's whole cost is the surface it shares
+# with upstream, and a .github/ directory upstream does not have is one more file to carry. The
+# product owning the upkeep of its own dependency is also the honest description of what this is.
+#
+# It runs the same `scripts/sync-fork.mjs` a human runs locally -- no logic is restated in YAML, so
+# the thing that is tested is the thing that runs.
+#
+# Secrets this needs, on THIS repository:
+#   FORK_TOKEN          a PAT with repo access to Haze-xyz/Sunrise-mcp-fork (checkout + push)
+#   TELEGRAM_BOT_TOKEN  where the summary goes
+#   TELEGRAM_CHAT_ID    who it goes to
+# Without the Telegram pair the job still syncs and just says it sent nothing.
+
+name: sync-fork
+
+on:
+  schedule:
+    # 05:00 UTC daily. Windows runners bill at 2x, and a full build is ~10 min, so this is ~600
+    # billed minutes a month against a 2000-minute free allowance for a private repository.
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+# A second run while the first is mid-merge would race on the same branch.
+concurrency:
+  group: sync-fork
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # Windows because the thing being proven is that the DLL still compiles, and MSBuild is the
+    # only thing that can prove it. A Linux runner could merge but never build, which would make
+    # every outcome `mergedNotBuilt` -- true, and useless.
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out sunrise-mcp
+        uses: actions/checkout@v4
+
+      - name: Check out the Sunrise fork
+        uses: actions/checkout@v4
+        with:
+          repository: Haze-xyz/Sunrise-mcp-fork
+          ref: layer2-entry
+          path: fork
+          # Full history: a merge needs the commits behind both sides, and a shallow clone has none.
+          fetch-depth: 0
+          token: ${{ secrets.FORK_TOKEN }}
+
+      - name: Give git an identity for the merge commit
+        working-directory: fork
+        run: |
+          git config user.name "sunrise-mcp sync"
+          git config user.email "sync@users.noreply.github.com"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # The pure logic first: if the table is red there is no point merging anything.
+      - name: Decision tests
+        run: node scripts/sync-decision-smoke.mjs
+
+      - name: Sync the fork
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Node's os.tmpdir() reads TEMP/TMP on Windows, and the runner's own temp is not where it
+          # would otherwise point. Set both so the scratch worktree and the build log land where the
+          # upload step below can actually find them.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        # --no-credential-helper: actions/checkout already put a token on `fork`, and gh is not
+        # installed here. --remote origin: on a runner that is what the checkout is called.
+        # A non-zero exit means the run needs a human, so the job goes red on purpose.
+        run: node scripts/sync-fork.mjs --repo fork --push --remote origin --no-credential-helper
+
+      - name: Keep the build log when something went wrong
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/sunrise-sync-build-*.log
+          if-no-files-found: ignore
