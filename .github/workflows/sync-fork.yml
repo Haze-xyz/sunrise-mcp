@@ -21,6 +21,16 @@ on:
     # billed minutes a month against a 2000-minute free allowance for a private repository.
     - cron: '0 5 * * *'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch of the fork to sync'
+        required: false
+        default: layer2-entry
+      push:
+        description: 'Publish and push a green result (off is a dry run against any branch)'
+        type: boolean
+        required: false
+        default: true
 
 # A second run while the first is mid-merge would race on the same branch.
 concurrency:
@@ -43,7 +53,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Haze-xyz/Sunrise-mcp-fork
-          ref: layer2-entry
+          ref: ${{ inputs.ref || 'layer2-entry' }}
           path: fork
           # Full history: a merge needs the commits behind both sides, and a shallow clone has none.
           fetch-depth: 0
@@ -67,7 +77,10 @@ jobs:
       - name: Decision tests
         run: node scripts/sync-decision-smoke.mjs
 
+      # Two steps rather than one with a computed flag: which of publish-and-push or dry-run
+      # happened has to be readable in the run's own log, not inferred from an expression.
       - name: Sync the fork
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -80,6 +93,15 @@ jobs:
         # installed here. --remote origin: on a runner that is what the checkout is called.
         # A non-zero exit means the run needs a human, so the job goes red on purpose.
         run: node scripts/sync-fork.mjs --repo fork --push --remote origin --no-credential-helper
+
+      - name: Sync the fork (dry run, nothing published)
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.push }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: node scripts/sync-fork.mjs --repo fork --no-publish
 
       - name: Keep the build log when something went wrong
         if: failure()
