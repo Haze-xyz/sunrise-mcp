@@ -5,6 +5,11 @@
  *   client level=info t=113672 ev=shutdown result=ok
  * `text=` is emitted last by the C++ sink and its value may contain spaces, so it runs to the end
  * of the line; every other value stops at the next space.
+ *
+ * That is a contract on the sink, not something this parser checks. If a line ever broke it and
+ * carried a `text=` before its last field, everything after that `text=` -- including what would
+ * otherwise have been later fields such as `ev=` -- is silently absorbed into `fields.text`: no
+ * throw, no warning, and no later field survives. See the smoke test for the exact shape of that.
  */
 
 /** One parsed line. `raw` is kept because the digest hands lines back verbatim. */
@@ -12,7 +17,10 @@ export interface LogRecord {
   raw: string;
   /** First token, when it is not itself a key=value pair. '' when the line has no channel. */
   channel: string;
-  /** 'error' | 'warn' | 'info' | 'debug', or '' when the line carries no readable level. */
+  /** The raw value the line carried after `level=`: normally one of 'error' | 'warn' | 'info' |
+   *  'debug', and '' when the line carries no readable level. `level` is never validated against
+   *  that set -- anything else is passed through untouched and treated as unknown by
+   *  `matchesFilter`. */
   level: string;
   /** Milliseconds since the sink opened, or null. Resets to 0 when the game restarts. */
   t: number | null;

@@ -65,6 +65,16 @@ async function main() {
     assert.equal(rec.fields.text, 'world_controller: Leaving state for reason x.');
   });
 
+  await test('a text= out of position silently absorbs every field after it', () => {
+    // The real sink always emits text= last -- that is the contract parseLogLine relies on. This
+    // pins what happens if a line ever broke that contract: no throw, no warning, and the fields
+    // that would have come after text= (here ev= and site=) are gone, swallowed into fields.text.
+    const raw = 'client level=info t=1 text=hello there ev=retail site=5';
+    const rec = parseLogLine(raw);
+    assert.equal(rec.ev, '');
+    assert.equal(rec.fields.text, 'hello there ev=retail site=5');
+  });
+
   await test('a line with no recognisable shape still parses without throwing', () => {
     const rec = parseLogLine('this is not a log line');
     assert.equal(rec.channel, 'this');
@@ -139,7 +149,9 @@ async function main() {
     assert.equal(sizeUnder(byEv), 34);
     assert.equal(sizeUnder(byEvAndSite), 203);
 
-    // And the shared rule must agree with buildDigest itself, or the comparison above is theatre.
+    // This only checks that the test's local copy of the rule has not drifted from buildDigest's
+    // own: sizeUnder mirrors buildDigest's rule structurally, so the two agree for any input, not
+    // just this fixture -- it catches a hand-edit to one copy that was not made to the other.
     const digest = buildDigest(records);
     assert.equal(digest.rows.length + digest.verbatim.length, sizeUnder(byEv));
   });
@@ -152,6 +164,9 @@ async function main() {
     const digest = buildDigest(records);
     assert.equal(digest.rows.length, 1);
     assert.equal(digest.rows[0].ev, 'send');
+    // The warn line counts in the row (21, not 20) AND appears verbatim: the row says how often
+    // the event happened, the verbatim line says what went wrong.
+    assert.equal(digest.rows[0].count, 21);
     assert.equal(digest.verbatim.length, 1);
     assert.ok(digest.verbatim[0].includes('level=warn'));
   });
