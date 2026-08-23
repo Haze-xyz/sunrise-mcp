@@ -42,7 +42,11 @@ jobs:
     # Windows because the thing being proven is that the DLL still compiles, and MSBuild is the
     # only thing that can prove it. A Linux runner could merge but never build, which would make
     # every outcome `mergedNotBuilt` -- true, and useless.
-    runs-on: windows-latest
+    #
+    # This specific image because it is the one upstream's own Build workflow uses, where the same
+    # solution takes ~8 minutes. On windows-latest (VS 2022) it compiled fine and took 16m01s,
+    # measured 2026-08-23 -- twice the runner minutes for the same answer.
+    runs-on: windows-2025-vs2026
     timeout-minutes: 60
 
     steps:
