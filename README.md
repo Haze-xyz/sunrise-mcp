@@ -15,7 +15,8 @@ layer for composing them into richer tools without touching the game's C++ at al
 ## Requirements & where it runs
 
 - **A Sunrise install built from the private Sunrise fork this repo pairs with** —
-  `Haze-xyz/Sunrise-build79433`, branch `layer2-entry` — not from upstream `stanuwu/Sunrise`.
+  `Haze-xyz/Sunrise-mcp-fork` (its default branch, `layer2-entry`) — not from upstream
+  `stanuwu/Sunrise`.
   Everything this server talks to — the console endpoint (the `127.0.0.1`-bound listener), the
   `mem.*` primitives, `character.*`, forced-key input — is that fork's addition to the
   `steam_api64.dll`; upstream Sunrise has none of it, so against a stock install nothing here
@@ -55,6 +56,37 @@ Everything is env vars, with Windows-appropriate defaults:
 | `SUNRISE_ENDPOINT_HOST` | `127.0.0.1` | Host the console endpoint listens on. |
 | `SUNRISE_ENDPOINT_PORT` | `30975` | Port the console endpoint listens on. |
 | `SUNRISE_GAME_DIR` | `E:\Destiny_Sunrise` | Game install directory. `destiny2.exe` and the log both live under here. |
+| `SUNRISE_FORK_DIR` | *(none — refuses)* | The Sunrise fork checkout, for `sync-fork`. No default: a built-in path belongs to whoever wrote it. |
+| `SUNRISE_MSBUILD` | *(found via vswhere)* | An explicit `MSBuild.exe`, when vswhere finds the wrong install or none. |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | *(none — stays quiet)* | Where `sync-fork` sends its summary. Both must be set. |
+
+## Keeping the fork current
+
+Every tool here talks to a DLL built from the Sunrise fork, so a fork that has fallen behind
+upstream is a server answering about a game nobody else runs. Measured on 2026-08-23: six days of
+drift was 43 upstream commits, 352 files and 3 conflicting ones. The same drift left for three
+months is a project, not an afternoon.
+
+```
+npm run sync-fork -- --repo <fork checkout>      # or set SUNRISE_FORK_DIR
+```
+
+It fetches upstream, merges **in a throwaway worktree**, builds with MSBuild, and moves your branch
+onto the result only when the build is green. It never resolves a conflict, and a failed run leaves
+your checkout exactly as it found it.
+
+| Outcome | What it means | Exit |
+|---|---|---|
+| `upToDate` | nothing upstream — the only silent outcome | 0 |
+| `dirty` | you have uncommitted changes, so nothing was touched | 1 |
+| `conflict` | the conflicting files are named; nothing was published | 1 |
+| `buildFailed` | merged cleanly, does not compile; nothing was published | 1 |
+| `mergedNotBuilt` | merged cleanly, no build run, so unproven | 0 |
+| `ready` | merged cleanly and compiles | 0 |
+
+Flags: `--no-build`, `--no-publish`, `--push`, `--json`. With `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_CHAT_ID` set, the same summary is sent to Telegram; with neither, it says so and carries
+on.
 
 ## Run it / connect an MCP client
 
