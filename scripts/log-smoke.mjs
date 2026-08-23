@@ -24,6 +24,7 @@ import {
   matchesFilter,
   parseLogLine,
 } from '../dist/log-parse.js';
+import { cursorState, decodeCursor, encodeCursor, fileIdentity } from '../dist/log-cursor.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(HERE, 'fixtures', 'sunrise-882.log');
@@ -177,6 +178,67 @@ async function main() {
     assert.equal(digest.rows[0].count, 6);
     assert.equal(digest.rows[0].firstT, 10);
     assert.equal(digest.rows[0].lastT, 60);
+  });
+
+  await test('a cursor survives a round trip', () => {
+    const encoded = encodeCursor({ v: 1, id: '42:1700000000000', off: 8192 });
+    assert.deepEqual(decodeCursor(encoded), { v: 1, id: '42:1700000000000', off: 8192 });
+  });
+
+  await test('garbage decodes to null rather than throwing', () => {
+    assert.equal(decodeCursor('not-base64!!'), null);
+    assert.equal(decodeCursor(Buffer.from('{}', 'utf8').toString('base64url')), null);
+    assert.equal(decodeCursor(Buffer.from('[1,2,3]', 'utf8').toString('base64url')), null);
+    assert.equal(decodeCursor(Buffer.from('{"v":2,"id":"a","off":0}', 'utf8').toString('base64url')), null);
+    assert.equal(decodeCursor(Buffer.from('{"v":1,"id":"a","off":-1}', 'utf8').toString('base64url')), null);
+  });
+
+  await test('no cursor means fresh', () => {
+    const identity = fileIdentity({ ino: 7, birthtimeMs: 1000, size: 500 });
+    assert.deepEqual(cursorState(undefined, identity), { state: 'fresh', offset: 0 });
+  });
+
+  await test('an undecodable cursor is invalid, not silently fresh', () => {
+    const identity = fileIdentity({ ino: 7, birthtimeMs: 1000, size: 500 });
+    assert.equal(cursorState('!!!', identity).state, 'invalid');
+  });
+
+  await test('rotation is caught by the identity test on its own', () => {
+    // Same offset, still inside the new file's size: only the id can tell these apart.
+    const before = fileIdentity({ ino: 7, birthtimeMs: 1000, size: 900 });
+    const after = fileIdentity({ ino: 8, birthtimeMs: 2000, size: 900 });
+    const cursor = encodeCursor({ v: 1, id: before.id, off: 400 });
+    assert.equal(cursorState(cursor, before).state, 'resumable');
+    assert.equal(cursorState(cursor, after).state, 'rotated');
+  });
+
+  await test('rotation is caught by the size test on its own', () => {
+    // Same id -- the case where Windows hands back a recycled file index -- but the file shrank.
+    const identity = fileIdentity({ ino: 7, birthtimeMs: 1000, size: 100 });
+    const cursor = encodeCursor({ v: 1, id: identity.id, off: 400 });
+    assert.equal(cursorState(cursor, identity).state, 'rotated');
+  });
+
+  await test('an offset exactly at end of file is resumable, not rotated', () => {
+    const identity = fileIdentity({ ino: 7, birthtimeMs: 1000, size: 400 });
+    const cursor = encodeCursor({ v: 1, id: identity.id, off: 400 });
+    assert.deepEqual(cursorState(cursor, identity), { state: 'resumable', offset: 400 });
+  });
+
+  await test('a bigint ino is accepted, since Node hands one back on some volumes', () => {
+    const identity = fileIdentity({ ino: 12345678901234567890n, birthtimeMs: 1000, size: 10 });
+    assert.equal(identity.id, '12345678901234567890:1000');
+  });
+
+  await test('two NTFS file ids that collide as doubles stay distinct', () => {
+    // Measured on this machine: a real ino was 15481123719086430, past 2^53. Above that a double
+    // cannot hold every integer, and 15481123719086431 and ...433 both become ...432. If this
+    // assertion ever fails, a rotated log reads as resumable and the next read walks into unrelated
+    // bytes -- the one failure this whole module exists to prevent.
+    assert.equal(Number(15481123719086431n), Number(15481123719086433n), 'the collision guarded against is real');
+    const left = fileIdentity({ ino: 15481123719086431n, birthtimeMs: 1000, size: 10 });
+    const right = fileIdentity({ ino: 15481123719086433n, birthtimeMs: 1000, size: 10 });
+    assert.notEqual(left.id, right.id);
   });
 
   const failed = results.filter((r) => !r.ok);

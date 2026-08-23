@@ -19,7 +19,10 @@ import path from 'node:path';
 const DEFAULT_DIR = 'E:\\Destiny_Sunrise\\bin\\x64\\Sunrise\\logs';
 
 function identity(s) {
-  return { ino: String(s.ino), birthtimeMs: Math.trunc(s.birthtimeMs), size: s.size };
+  // {bigint: true} below, so these are BigInts: a Windows file id runs past 2^53 and a double
+  // silently rounds it. Rounding here could only ever hide a real difference and report a false
+  // "unchanged", which is the one answer this probe must never give by accident.
+  return { ino: String(s.ino), birthtimeMs: Number(s.birthtimeMs), size: Number(s.size) };
 }
 
 async function main() {
@@ -32,12 +35,12 @@ async function main() {
   await rm(old, { force: true });
 
   await writeFile(live, 'first life\r\n'.repeat(40), 'utf8');
-  const before = identity(await stat(live));
+  const before = identity(await stat(live, { bigint: true }));
 
   // The rotation, byte for byte what open_log_file does.
   await rename(live, old);
   await writeFile(live, 'second life\r\n', 'utf8');
-  const after = identity(await stat(live));
+  const after = identity(await stat(live, { bigint: true }));
 
   const inoChanged = before.ino !== after.ino;
   const birthChanged = before.birthtimeMs !== after.birthtimeMs;
