@@ -7,6 +7,7 @@
  */
 
 import { open as openFile, stat as statFile } from 'node:fs/promises';
+import { StringDecoder } from 'node:string_decoder';
 
 import type { LogFilter, LogRecord } from './log-parse.js';
 import { matchesFilter, parseLogLine } from './log-parse.js';
@@ -67,6 +68,14 @@ export async function readWindow(logPath: string, options: ReadWindowOptions): P
   const handle = await openFile(logPath, 'r');
   try {
     const buffer = Buffer.alloc(CHUNK_BYTES);
+    // Decoding each chunk with buffer.toString('utf8') would be wrong at the seam: a multi-byte
+    // sequence split across two reads decodes as two replacement characters, 2 bytes becoming 6.
+    // Every offset here is derived from the decoded text, so the cursor would land past true EOF,
+    // cursorState would answer 'rotated' for a file that never rotated, and wait_for would end a
+    // wait claiming a restart that did not happen. StringDecoder holds the dangling bytes instead.
+    // Its tail is deliberately never flushed: bytes the game has not finished writing are left for
+    // the next call, exactly as an unterminated line is.
+    const decoder = new StringDecoder('utf8');
     let position = offset;
     /** Bytes of a line already seen but not yet terminated by a newline. */
     let pending = '';
@@ -78,7 +87,7 @@ export async function readWindow(logPath: string, options: ReadWindowOptions): P
       if (bytesRead === 0) break;
       position += bytesRead;
 
-      let text = pending + buffer.toString('utf8', 0, bytesRead);
+      let text = pending + decoder.write(buffer.subarray(0, bytesRead));
       let lineStart = pendingAt;
       for (;;) {
         const newline = text.indexOf('\n');

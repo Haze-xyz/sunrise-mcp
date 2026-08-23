@@ -15,7 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -323,6 +323,39 @@ async function main() {
     const second = await readWindow(file, { since: first.cursor, maxLines: 10 });
     assert.equal(second.records[0].t, 10, 'nothing may be lost at the cap');
     assert.equal(second.dropped, 10);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  await test('a multi-byte character on a chunk boundary neither corrupts nor drifts', async () => {
+    // The reader pulls 256 KiB per syscall. Decoding each chunk on its own splits a UTF-8 sequence
+    // into two replacement characters -- 2 bytes becoming 6 -- and because every offset here comes
+    // from the decoded text, the cursor overshoots true EOF. cursorState then answers 'rotated' for
+    // a file that never rotated: the next read starts over from zero, and in wait_for the wait ends
+    // reporting a restart that did not happen. Measured on the real code before the fix: +4 bytes.
+    const dir = await mkdtemp(path.join(tmpdir(), 'log-stream-'));
+    const file = path.join(dir, 'sunrise.log');
+    const CHUNK = 256 * 1024;
+    const filler = 'client level=info t=1 ev=pad\r\n';
+    let head = filler.repeat(Math.floor((CHUNK - 1) / filler.length));
+    head += 'x'.repeat(CHUNK - 1 - Buffer.byteLength(head));
+    await writeFile(
+      file,
+      Buffer.concat([
+        Buffer.from(head, 'utf8'),
+        Buffer.from('\u00e9', 'utf8'), // starts at CHUNK-1, so its second byte lands in chunk two
+        Buffer.from('\r\nclient level=info t=999 ev=marker text=cafe\r\n', 'utf8'),
+      ]),
+    );
+    const { size } = await stat(file);
+    const result = await readWindow(file, { filter: { ev: ['marker'] } });
+    assert.equal(result.records.length, 1);
+    assert.equal(decodeCursor(result.cursor).off, size, 'the cursor must land on true EOF, not past it');
+
+    const everything = await readWindow(file, { maxLines: 100000 });
+    assert.ok(
+      !everything.records.some((rec) => rec.raw.includes('\uFFFD')),
+      'a split sequence must not decode to replacement characters',
+    );
     await rm(dir, { recursive: true, force: true });
   });
 
