@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.log
+
+# The digest's numbers are only worth anything because they are computed on a real log, so the
+# scrubbed fixture is checked in on purpose -- despite the *.log rule above, which is there for the
+# game's own output.
+!scripts/fixtures/*.log

@@ -21,7 +21,8 @@
     "test:install": "npm run build && node scripts/install-smoke.mjs",
     "overlay-apply": "npm run build && node scripts/overlay-apply.mjs",
     "test:overlay": "npm run build && node scripts/overlay-smoke.mjs",
-    "test:deploy": "npm run build && node scripts/deploy-smoke.mjs"
+    "test:deploy": "npm run build && node scripts/deploy-smoke.mjs",
+    "test:log": "npm run build && node scripts/log-smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

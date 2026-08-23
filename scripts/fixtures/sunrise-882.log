@@ -1,0 +1,882 @@
+client level=info t=235 ev=package_trust stage=attach result=ok mode=package_integrity_bypass
+client level=info t=235 ev=steam_init result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=connect result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSAConnect result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSAConnectByNameA result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSAConnectByNameW result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSAConnectByList result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=send result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSASend result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=sendto result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSASendTo result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSASendMsg result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSASendDisconnect result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSAJoinLeaf result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=TransmitFile result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSAIoctl result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=getaddrinfo result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=GetAddrInfoW result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=GetAddrInfoExA result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=GetAddrInfoExW result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=gethostbyname result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=gethostbyaddr result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=getnameinfo result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=GetNameInfoW result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=DnsQuery_A result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=DnsQuery_W result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=DnsQuery_UTF8 result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=DnsQueryEx result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=recv result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSARecv result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=recvfrom result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=WSARecvFrom result=ok
+client level=debug t=235 ev=hook stage=attach group=egress name=DnsQueryRaw result=ok
+client level=info t=235 ev=hook stage=install group=egress count=31 result=ok
+client level=debug t=813 ev=egress stage=control target=redirect action=allow selector=0x48000016 status=0x0 caller=+0x0 name= result=ok
+client level=debug t=813 ev=egress stage=control target=redirect action=allow selector=0xC8000019 status=0x0 caller=+0x0 name= result=ok
+client level=debug t=828 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=fixture_machine result=ok
+client level=info t=1313 ev=graphics stage=probe result=ok driver=hardware level=0xB000
+client level=info t=1547 ev=cursor stage=install result=ok
+client level=info t=1625 ev=polled_input stage=install result=ok
+client level=info t=1625 ev=activate stage=graphics result=ok
+client level=debug t=1657 ev=texture stage=logo_sheet result=ok
+client level=info t=1657 ev=renderer stage=init result=ok
+client level=debug t=1719 ev=hook stage=attach group=network name=authentication_status result=ok
+client level=debug t=1719 ev=hook stage=attach group=network name=set_certificate result=ok
+client level=info t=1719 ev=activate stage=platform result=ok
+client level=debug t=1735 ev=activate stage=main phase=begin
+client level=info t=2438 ev=bootstrap stage=token result=ok
+client level=debug t=2516 ev=hook stage=attach group=network name=transport_kind result=ok
+client level=debug t=2516 ev=hook stage=attach group=network name=http_execute_request result=ok
+client level=debug t=2516 ev=hook stage=attach group=network name=bubble_authority_decoder result=ok
+client level=debug t=2516 ev=hook stage=attach group=network name=content_untracked_getter result=ok
+client level=debug t=2516 ev=hook stage=attach group=network name=signon_readiness_failure result=ok
+client level=debug t=2516 ev=hook stage=attach group=network name=signon_readiness_ready result=ok
+client level=info t=2969 ev=investment stage=family5_commit result=ok
+client level=info t=2969 ev=investment stage=install result=ok
+client level=info t=2969 ev=activate stage=game_network result=ok
+client level=info t=2969 ev=activate stage=package_keys result=ok
+client level=info t=3047 ev=retail stage=install result=ok
+client level=info t=3047 ev=assert stage=install result=ok
+client level=info t=3141 ev=config_getter stage=install result=ok
+client level=info t=3297 ev=bootflow stage=slice_set result=ok
+client level=info t=3391 ev=bootflow stage=profile_setup result=ok
+client level=info t=3532 ev=bootflow stage=composition result=ok
+client level=info t=3672 ev=bootflow stage=orbit_handoff result=ok
+client level=info t=3750 ev=bootflow stage=join_ready result=ok
+client level=info t=3891 ev=bootflow stage=owner_slot result=ok
+client level=info t=4047 ev=bootflow stage=region result=ok
+client level=info t=4110 ev=bootflow stage=world_step result=ok
+client level=info t=4188 ev=bootflow stage=spawn_hold result=ok
+client level=info t=4313 ev=bootflow stage=fade_release result=ok
+client level=info t=4563 ev=teleport stage=install result=ok
+client level=info t=4735 ev=noclip stage=install result=ok
+client level=info t=4875 ev=infinite_ammo stage=install result=ok
+client level=info t=5000 ev=queuez stage=family0_target sweep=0x7FF794766240 getter=0x7FF794B4C6E0
+client level=info t=5078 ev=queuez stage=family0_install result=ok
+client level=info t=5188 ev=queuez stage=notification result=ok
+client level=info t=5297 ev=bitmap stage=ref_guard result=ok
+client level=debug t=5297 ev=activate stage=main phase=complete ms=3562 result=ok
+client level=info t=5297 ev=activate stage=main result=ok
+client level=info t=5297 ev=build_data stage=domains named=1 items=1 details=1 buckets=1 sockets=1 abilities=1 progressions=1 scenarios=1
+client level=debug t=6047 ev=bitmap stage=seen handle=0x80A146C7 result=ok
+client level=debug t=6047 ev=bitmap stage=seen handle=0x80A14581 result=ok
+client level=debug t=6047 ev=bitmap stage=seen handle=0x80A146CB result=ok
+client level=debug t=6047 ev=bitmap stage=seen handle=0x80A146CE result=ok
+client level=debug t=6047 ev=bitmap stage=seen handle=0x80A146D1 result=ok
+client level=debug t=6047 ev=bitmap stage=seen handle=0x80A146D4 result=ok
+client level=debug t=6047 ev=bitmap stage=seen handle=0x80A146D7 result=ok
+client level=debug t=6047 ev=bitmap stage=seen handle=0x80A146AA result=ok
+client level=info t=6313 ev=retail site=5 text=networking:stun: Created stun endpoint, advancing to DNS discovery
+client level=info t=6313 ev=retail site=6 text=networking:stun: Changing stun stage: [-1] -> [5]
+client level=info t=6328 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=debug t=6328 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun101.signon.deadorbit.net result=ok
+client level=info t=6344 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6344 ev=retail site=8 text=networking:stun: Adding DNS entry: [stun101.signon.deadorbit.net] ip: [127.0.0.1:0] to STUN server list.
+client level=debug t=6344 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun104.signon.gravityshavings.net result=ok
+client level=info t=6360 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6360 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun104.signon.gravityshavings.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6360 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun102.signon.deadorbit.net result=ok
+client level=info t=6375 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6375 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun102.signon.deadorbit.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6375 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun103.signon.gravityshavings.net result=ok
+client level=info t=6391 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6391 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun103.signon.gravityshavings.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6391 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun103.signon.deadorbit.net result=ok
+client level=info t=6407 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6407 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun103.signon.deadorbit.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6407 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun102.signon.gravityshavings.net result=ok
+client level=info t=6407 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6407 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun102.signon.gravityshavings.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6422 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun104.signon.deadorbit.net result=ok
+client level=info t=6422 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6422 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun104.signon.deadorbit.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6438 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun101.signon.gravityshavings.net result=ok
+client level=info t=6438 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6438 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun101.signon.gravityshavings.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6453 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun105.signon.deadorbit.net result=ok
+client level=info t=6453 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6453 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun105.signon.deadorbit.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6453 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun105.signon.gravityshavings.net result=ok
+client level=info t=6469 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6469 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun105.signon.gravityshavings.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6469 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun106.signon.deadorbit.net result=ok
+client level=info t=6485 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6485 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun106.signon.deadorbit.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6485 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun106.signon.gravityshavings.net result=ok
+client level=info t=6500 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6500 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun106.signon.gravityshavings.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6500 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun107.signon.deadorbit.net result=ok
+client level=info t=6516 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6516 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun107.signon.deadorbit.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6516 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun107.signon.gravityshavings.net result=ok
+client level=info t=6532 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6532 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun107.signon.gravityshavings.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6532 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun108.signon.deadorbit.net result=ok
+client level=info t=6532 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6532 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun108.signon.deadorbit.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=debug t=6547 ev=egress stage=resolve target=redirect action=allow selector=0x2 status=0x0 caller=+0x0 name=stun108.signon.gravityshavings.net result=ok
+client level=info t=6547 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6547 ev=retail site=9 text=networking:stun: Resolved DNS entry: [stun108.signon.gravityshavings.net] to ip: [127.0.0.1:0], found duplicate, skipping.
+client level=info t=6563 ev=retail site=7 text=networking:stun: Using lookup type: [0]
+client level=info t=6563 ev=retail site=10 text=networking:stun: Selected stun server: [0] ip address: [127.0.0.1:3074] valid stun server count: [1]
+client level=info t=6563 ev=retail site=6 text=networking:stun: Changing stun stage: [5] -> [1]
+client level=info t=6578 ev=retail site=11 text=networking:stun: Success sending STUN request type: [1] server address: [127.0.0.1:3074]
+client level=info t=6578 ev=retail site=12 text=networking:stun: Sending IP discovery STUN packet attempt: [1], next attempt in: [400 ms], send success: [true]
+client level=info t=6594 ev=retail site=13 text=networking:stun: received: Valid STUN response from: [127.0.0.1:3074], for stage: [1], response size: [16 bytes]
+client level=info t=6594 ev=retail site=14 text=networking:stun: client external ip address: [127.0.0.1:3097]
+client level=info t=6594 ev=retail site=6 text=networking:stun: Changing stun stage: [1] -> [2]
+client level=info t=6610 ev=retail site=11 text=networking:stun: Success sending STUN request type: [2] server address: [127.0.0.1:3074]
+client level=info t=6610 ev=retail site=15 text=networking:stun: Sending NAT discovery packet stage 1 attempt: [1], next attempt in: [500 ms], send success: [true]
+client level=info t=6625 ev=retail site=13 text=networking:stun: received: Valid STUN response from: [127.0.0.1:3074], for stage: [2], response size: [16 bytes]
+client level=info t=6625 ev=retail site=16 text=networking:stun: NAT type open
+client level=info t=6625 ev=retail site=6 text=networking:stun: Changing stun stage: [2] -> [6]
+client level=info t=6625 ev=retail site=17 text=networking:stun: Reporting NAT type [1] and address [127.0.0.1:3097].
+client level=info t=6625 ev=retail site=6 text=networking:stun: Changing stun stage: [6] -> [-1]
+client level=info t=6625 ev=retail site=18 text=networking:stun: Disposing our STUN endpoint
+client level=info t=6625 ev=retail site=19 text=networking:demonware:log:warn: file 'bdSocketRouterConfig.cpp', line: '86', msg: Receive timeout configured to 99999.000000. This is outside the normal recommended range
+client level=info t=11735 ev=retail site=20 text=high_water:demonware_heap: max used increased to 35072
+client level=info t=12063 ev=retail site=21 text=world_controller:task_manager: Completed task 'ENUM(7)' after '6625ms'.
+client level=info t=12063 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [10832] ms in world controller state: [2] name: [bootflow:bootload]
+client level=info t=12063 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:bootload' for reason 'unavailable'.
+client level=info t=12063 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:start' for reason 'unavailable'.
+client level=info t=12063 ev=retail site=24 text=world_controller:task_manager: Started   task 'ENUM(0)'.
+client level=info t=12063 ev=retail site=24 text=world_controller:task_manager: Started   task 'ENUM(3)'.
+client level=info t=12063 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(3)' to 'ENUM(4)'.
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A145DA result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A145E5 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A145E8 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A145F0 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A145F9 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A145FC result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A14600 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A14603 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A14606 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A14609 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A1460C result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A1460F result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A14612 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A14615 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A14618 result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A1461B result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A1461E result=ok
+client level=debug t=12078 ev=bitmap stage=seen handle=0x80A14637 result=ok
+client level=info t=12078 ev=retail site=26 text=world_controller:task_manager: Completed task 'ENUM(3)' after '15ms'.
+client level=info t=12922 ev=retail site=26 text=world_controller:task_manager: Completed task 'ENUM(0)' after '861ms'.
+client level=info t=12922 ev=retail site=27 text=networking:platform_user: Assigning primary controller to '-1'.
+client level=info t=12922 ev=retail site=24 text=world_controller:task_manager: Started   task 'ENUM(1)'.
+client level=info t=12922 ev=retail site=24 text=world_controller:task_manager: Started   task 'ENUM(4)'.
+client level=info t=12922 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(4)' to 'ENUM(5)'.
+client level=info t=12938 ev=retail site=26 text=world_controller:task_manager: Completed task 'ENUM(1)' after '8ms'.
+client level=info t=12938 ev=retail site=28 text=networking:platform_user: Signing user '(null)' controller '0' in to machine.
+client level=debug t=12938 ev=bitmap stage=seen handle=0x80A146B4 result=ok
+client level=debug t=12938 ev=bitmap stage=seen handle=0x80A146B7 result=ok
+client level=info t=12938 ev=retail site=29 text=networking:platform_user: player signed in, controller: 0
+client level=info t=12938 ev=retail site=24 text=world_controller:task_manager: Started   task 'ENUM(2)'.
+client level=info t=12938 ev=retail site=26 text=world_controller:task_manager: Completed task 'ENUM(2)' after '0ms'.
+client level=info t=12938 ev=retail site=26 text=world_controller:task_manager: Completed task 'ENUM(4)' after '15ms'.
+client level=info t=12938 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [876] ms in world controller state: [3] name: [bootflow:start]
+client level=info t=12938 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:start' for reason 'unavailable'.
+client level=info t=12938 ev=retail site=30 text=networking:link: Endpoint traffic is now: [disabled].
+client level=info t=12938 ev=retail site=0 text=networking:UPnP: Resetting UPnP client.
+client level=info t=12938 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:platform_signin' for reason 'unavailable'.
+client level=debug t=12938 ev=signon stage=readiness_ready native=1 forced=1 result=ok
+client level=info t=12938 ev=retail site=31 text=world_controller:retail_datamine: Timed operation: [ENUM(4)], took: [0 ms], average: [0.000000 ms], min: [0.000000], max: [0.000000], count: [1]
+client level=debug t=12938 ev=signon stage=readiness_ready native=1 forced=1 result=ok
+client level=info t=12938 ev=retail site=32 text=networking:logic:session: added local user 0 [player identifier=7F:6E:B1:0C:34:A6:03:16][name=Player]
+client level=info t=12938 ev=retail site=33 text=networking:logic:session: local user 0 set platform account id=unknown platform account id, live=1, online=1, free=0, user_content=1, friend_content=1
+client level=info t=12938 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [0] ms in world controller state: [4] name: [bootflow:platform_signin]
+client level=info t=12938 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:platform_signin' for reason 'unavailable'.
+client level=info t=12938 ev=retail site=31 text=world_controller:retail_datamine: Timed operation: [ENUM(5)], took: [0 ms], average: [0.000000 ms], min: [0.000000], max: [0.000000], count: [1]
+client level=info t=12938 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:platform_account_warnings' for reason 'unavailable'.
+client level=info t=12938 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [0] ms in world controller state: [5] name: [bootflow:platform_account_warnings]
+client level=info t=12938 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:platform_account_warnings' for reason 'unavailable'.
+client level=info t=12938 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:enumerate_content_rights' for reason 'unavailable'.
+client level=info t=12938 ev=retail site=34 text=networking:online:ownership_manager: Requesting ownership refresh from BAP.
+client level=info t=12938 ev=retail site=35 text=networking:online:ownership_manager: Changing state (idle --> waiting_to_issue_local_entitlement_enumeration).
+client level=info t=12953 ev=retail site=35 text=networking:online:ownership_manager: Changing state (waiting_to_issue_local_entitlement_enumeration --> waiting_for_local_entitlement_enumeration).
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22A
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22B
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22C
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22D
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22E
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22F
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A230
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A266
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A267
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A268
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A27A
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A27B
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A298
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A299
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A29A
+client level=info t=12953 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x144B78
+client level=info t=12953 ev=retail site=37 text=networking:online:ownership_manager: recording locally determined offer key 0xE0200002 (paid tier)
+client level=info t=12953 ev=retail site=38 text=networking:online:ownership_manager: recording locally determined offer key 0xE0200001 (full sku)
+client level=info t=12953 ev=retail site=39 text=networking:online:ownership_manager: swallowing a refresh request; we are not through signon
+client level=info t=12953 ev=retail site=35 text=networking:online:ownership_manager: Changing state (waiting_for_local_entitlement_enumeration --> idle).
+client level=info t=12953 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [14] ms in world controller state: [6] name: [bootflow:enumerate_content_rights]
+client level=info t=12953 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:enumerate_content_rights' for reason 'unavailable'.
+client level=info t=12953 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:account_signin' for reason 'unavailable'.
+client level=info t=12953 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(5)' to 'ENUM(6)'.
+client level=info t=12969 ev=retail site=40 text=networking:signon: Entering state _retrieving_platform_token
+client level=debug t=12985 ev=steam stage=app_ticket_request result=ok
+client level=debug t=12985 ev=steam stage=app_ticket_read result=ok
+client level=info t=12985 ev=retail site=41 text=networking:signon:platform: RequestEncryptedAppTicket succeeded.  Token [128]=<binary>
+client level=info t=13016 ev=retail site=40 text=networking:signon: Entering state _sending_signon_request
+client level=info t=13016 ev=retail site=42 text=networking:signon:client: Signon client set to state _pending
+client level=info t=13016 ev=retail site=43 text=networking:signon:client: Signon server response received
+client level=info t=13016 ev=retail site=44 text=networking:signon:client: Parsing signon server response (372 bytes)
+client level=info t=13016 ev=retail site=45 text=networking:signon:client: Server environment: live
+client level=info t=13016 ev=retail site=46 text=networking:stun: Client external address from signon: [127.0.0.1:0].
+client level=info t=13032 ev=retail site=47 text=world_controller:state:bootflow_account_signin_handler: Demonware lobby connection not desired, continuing without Demonware lobby connection.
+client level=info t=13032 ev=retail site=31 text=world_controller:retail_datamine: Timed operation: [ENUM(8)], took: [70 ms], average: [70.000000 ms], min: [70.000000], max: [70.000000], count: [1]
+client level=info t=13032 ev=retail site=48 text=networking:stun: Using STUN discovered address and NAT type.
+client level=info t=13032 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [76] ms in world controller state: [7] name: [bootflow:account_signin]
+client level=info t=13032 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:content_check' for reason 'unavailable'.
+client level=info t=13032 ev=content_config stage=get route=manifest bytes=105232 result=ok
+client level=info t=13203 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [167] ms in world controller state: [16] name: [bootflow:content_check]
+client level=info t=13203 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:package_registration' for reason 'unavailable'.
+client level=info t=15516 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [2312] ms in world controller state: [21] name: [bootflow:package_registration]
+client level=info t=15516 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:package_registration' for reason 'unavailable'.
+client level=info t=15516 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:bap_signin' for reason 'unavailable'.
+client level=info t=15516 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(0)'.
+client level=info t=15516 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(1)'.
+client level=info t=15516 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(2)'.
+client level=info t=15516 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(3)'.
+client level=info t=15516 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(3)' after '0ms'.
+client level=info t=15516 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(4)'.
+client level=info t=15516 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(4)' after '0ms'.
+client level=info t=15516 ev=retail site=51 text=networking:server:bap: primary BAP server IP address: 1.0.0.127, port: 30974
+client level=debug t=15516 ev=send stage=stack bytes=140 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,174BF9C,1747FF3,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=15532 ev=send stage=stack bytes=142 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=15532 ev=send stage=stack bytes=48 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,174BEBC,1747FFD,E7658F,16CCE2C,B60390,415EB9,31B004,318991,31B241,3537B3,353874
+client level=debug t=15532 ev=send stage=stack bytes=98 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=15532 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,174C74C,1748007,E7658F,16CCE2C,B60390,415EB9,31B004,318991,31B241,3537B3,353874
+client level=debug t=15532 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=15547 ev=send stage=stack bytes=122 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,174C684,174801A,E7658F,16CCE2C,B60390,415EB9,31B004,318991,31B241,3537B3,353874
+client level=debug t=15547 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=15547 ev=send stage=stack bytes=126 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,174C818,1748024,E7658F,16CCE2C,B60390,415EB9,31B004,318991,31B241,3537B3,353874
+client level=debug t=15547 ev=send stage=stack bytes=120 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=15563 ev=send stage=stack bytes=122 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,174C684,1748035,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=15563 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=15578 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(0)' after '62ms'.
+client level=info t=15578 ev=retail site=31 text=world_controller:retail_datamine: Timed operation: [ENUM(13)], took: [62 ms], average: [62.000000 ms], min: [62.000000], max: [62.000000], count: [1]
+client level=info t=16016 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(1)' after '499ms'.
+client level=info t=16016 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(14)'.
+client level=info t=16016 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(16)' to 'ENUM(-1)'.
+client level=info t=16032 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(14)' after '14ms'.
+client level=debug t=18266 ev=send stage=stack bytes=256 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=info t=20625 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(2)' after '5117ms'.
+client level=info t=20625 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(5)'.
+client level=info t=20641 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(5)' after '8ms'.
+client level=info t=20641 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(6)'.
+client level=info t=20641 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(7)'.
+client level=info t=20641 ev=retail site=52 text=world_controller:ui_stage: Stage-loading goal changed from 'ENUM(1)' to 'ENUM(-1)'.
+client level=info t=20750 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(6)' after '118ms'.
+client level=info t=20750 ev=retail site=31 text=world_controller:retail_datamine: Timed operation: [ENUM(11)], took: [126 ms], average: [126.000000 ms], min: [126.000000], max: [126.000000], count: [1]
+client level=info t=20813 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(7)' after '172ms'.
+client level=info t=20813 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(8)'.
+client level=info t=20813 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(8)' after '0ms'.
+client level=info t=20813 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(9)'.
+client level=info t=20985 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(9)' after '175ms'.
+client level=info t=20985 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(10)'.
+client level=info t=20985 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(15)'.
+client level=info t=20985 ev=retail site=52 text=world_controller:ui_stage: Stage-loading goal changed from 'ENUM(-1)' to 'ENUM(3)'.
+client level=info t=21266 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(10)' after '284ms'.
+client level=info t=21266 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(13)'.
+client level=info t=21375 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(13)' after '104ms'.
+client level=info t=21375 ev=retail site=31 text=world_controller:retail_datamine: Timed operation: [ENUM(12)], took: [563 ms], average: [563.000000 ms], min: [563.000000], max: [563.000000], count: [1]
+client level=info t=21547 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(15)' after '569ms'.
+client level=info t=21547 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(16)'.
+client level=info t=21547 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(-1)' to 'ENUM(19)'.
+client level=info t=21547 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(17)'.
+client level=info t=21547 ev=retail site=49 text=world_controller:task_manager: Started   task 'ENUM(18)'.
+client level=info t=21547 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(18)' after '0ms'.
+client level=debug t=21594 ev=bitmap stage=seen handle=0x80BC6893 result=ok
+client level=debug t=21594 ev=bitmap stage=seen handle=0x80BC7049 result=ok
+client level=debug t=21594 ev=bitmap stage=seen handle=0x80D5E1B7 result=ok
+client level=debug t=21594 ev=bitmap stage=seen handle=0x80B46A3D result=ok
+client level=debug t=21594 ev=bitmap stage=seen handle=0x80B46A43 result=ok
+client level=debug t=21594 ev=bitmap stage=seen handle=0x80B47F57 result=ok
+client level=debug t=21594 ev=bitmap stage=seen handle=0x80B47F53 result=ok
+client level=info t=21594 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(16)' after '48ms'.
+client level=info t=23047 ev=retail site=50 text=world_controller:task_manager: Completed task 'ENUM(17)' after '1500ms'.
+client level=info t=23047 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [7542] ms in world controller state: [22] name: [bootflow:bap_signin]
+client level=info t=23047 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:bap_signin' for reason 'unavailable'.
+client level=info t=23047 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:investment_signin' for reason 'unavailable'.
+client level=info t=23047 ev=retail site=53 text=world_controller:task_manager: Started   task 'ENUM(0)'.
+client level=info t=23047 ev=retail site=53 text=world_controller:task_manager: Started   task 'ENUM(1)'.
+client level=info t=23047 ev=retail site=54 text=world_controller:task_manager: Completed task 'ENUM(1)' after '0ms'.
+client level=info t=23047 ev=retail site=53 text=world_controller:task_manager: Started   task 'ENUM(2)'.
+client level=info t=23047 ev=retail site=53 text=world_controller:task_manager: Started   task 'ENUM(6)'.
+client level=info t=23047 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(19)' to 'ENUM(20)'.
+client level=info t=23094 ev=retail site=54 text=world_controller:task_manager: Completed task 'ENUM(6)' after '49ms'.
+client level=debug t=23328 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=23344 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=24235 ev=retail site=54 text=world_controller:task_manager: Completed task 'ENUM(2)' after '1181ms'.
+client level=info t=24235 ev=retail site=53 text=world_controller:task_manager: Started   task 'ENUM(4)'.
+client level=info t=24235 ev=retail site=53 text=world_controller:task_manager: Started   task 'ENUM(5)'.
+client level=info t=24235 ev=retail site=54 text=world_controller:task_manager: Completed task 'ENUM(5)' after '0ms'.
+client level=info t=24469 ev=retail site=55 text=world_controller: successfully changed world to: ambient_bootstrap
+client level=info t=24469 ev=retail site=54 text=world_controller:task_manager: Completed task 'ENUM(4)' after '229ms'.
+client level=info t=24500 ev=retail site=56 text=content_table_patching: patch contents have been cleared
+client level=debug t=24500 ev=send stage=stack bytes=79 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=24516 ev=send stage=stack bytes=220 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=24516 ev=investment stage=family5_commit result=armed
+client level=debug t=24516 ev=send stage=stack bytes=126 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=24516 ev=bitmap stage=seen handle=0x80BC7031 result=ok
+client level=debug t=24532 ev=send stage=stack bytes=43 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=warn t=24547 ev=queuez stage=notification result=skipped reason=null_payload
+client level=info t=24547 ev=retail site=57 text=networking:investment:server_object_manager:queuez_family_update_begin: ignoring family-update due to unhandled replication state, family_type=ENUM(4), family_root_soid=0x9EAA300100100100, replication state=1
+client level=info t=24547 ev=retail site=58 text=networking:investment:push:queuez: failed to process update for [family_type ENUM(4), family_root_soid 0x9EAA300100100100, version 0, flags 0x01, object_count 173]
+client level=info t=24547 ev=retail site=58 text=networking:investment:push:queuez: failed to process update for [family_type ENUM(0), family_root_soid 0x9EAA300100100100, version 0, flags 0x01, object_count 2]
+client level=info t=24547 ev=queuez stage=family0_list countA=0 countB=0 first=0x0000000000000000/0 second=0x0000000000000000/0
+client level=info t=24547 ev=queuez stage=family0 result=seeded replaced=0x0000000000000000 rewrites=1
+client level=debug t=24563 ev=send stage=stack bytes=37 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=24563 ev=send stage=stack bytes=37 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=info t=24578 ev=investment stage=family4 result=resolved
+client level=info t=24578 ev=investment stage=derived result=rebuilt
+client level=info t=24610 ev=retail site=54 text=world_controller:task_manager: Completed task 'ENUM(0)' after '1556ms'.
+client level=info t=24610 ev=retail site=59 text=networking:link: Starting port collsion resolution for endpoint type: [2], using port: [2003], max attempts: [100], max upnp attempts: [6]
+client level=info t=24610 ev=retail site=60 text=networking:port_collision_resolver: Starting port collision resolution for endpoint type: [2] port: [2003].
+client level=info t=24610 ev=retail site=53 text=world_controller:task_manager: Started   task 'ENUM(7)'.
+client level=info t=24610 ev=retail site=54 text=world_controller:task_manager: Completed task 'ENUM(7)' after '0ms'.
+client level=info t=24610 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [1556] ms in world controller state: [23] name: [bootflow:investment_signin]
+client level=info t=24610 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:investment_signin' for reason 'unavailable'.
+client level=info t=24610 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:profile_setup' for reason 'unavailable'.
+client level=info t=24610 ev=bootflow stage=profile_setup result=skipped
+client level=info t=24610 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [0] ms in world controller state: [24] name: [bootflow:profile_setup]
+client level=info t=24610 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:profile_setup' for reason 'unavailable'.
+client level=info t=24610 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:prepare_for_orbit' for reason 'unavailable'.
+client level=info t=24610 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(20)' to 'ENUM(26)'.
+client level=info t=24610 ev=retail site=61 text=networking:online:ownership_manager: Changing ownership authority (signon server --> bap server).
+client level=info t=24610 ev=retail site=62 text=networking:online_consumable_manager: refresh desired
+client level=info t=24610 ev=retail site=34 text=networking:online:ownership_manager: Requesting ownership refresh from BAP.
+client level=info t=24610 ev=retail site=35 text=networking:online:ownership_manager: Changing state (idle --> waiting_to_issue_local_entitlement_enumeration).
+client level=debug t=24610 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=info t=24610 ev=retail site=35 text=networking:online:ownership_manager: Changing state (waiting_to_issue_local_entitlement_enumeration --> waiting_for_local_entitlement_enumeration).
+client level=info t=24610 ev=retail site=63 text=networking:UPnP: Started UPnP client for port: [2003].
+client level=debug t=24610 ev=send stage=stack bytes=32 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22A
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22B
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22C
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22D
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22E
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A22F
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A230
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A266
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A267
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A268
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A27A
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A27B
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A298
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A299
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x10A29A
+client level=info t=24625 ev=retail site=36 text=networking:online:ownership_manager: recording locally determined offer key 0x144B78
+client level=info t=24625 ev=retail site=37 text=networking:online:ownership_manager: recording locally determined offer key 0xE0200002 (paid tier)
+client level=info t=24625 ev=retail site=38 text=networking:online:ownership_manager: recording locally determined offer key 0xE0200001 (full sku)
+client level=info t=24625 ev=retail site=64 text=voice_engine_durango: sending purchased offers request
+client level=info t=24625 ev=retail site=35 text=networking:online:ownership_manager: Changing state (waiting_for_local_entitlement_enumeration --> waiting_for_bap_refresh).
+client level=debug t=24625 ev=send stage=stack bytes=219 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=24625 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=24641 ev=retail site=65 text=networking:online:ownership_manager: Received update purchased offers response
+client level=info t=24641 ev=retail site=35 text=networking:online:ownership_manager: Changing state (waiting_for_bap_refresh --> idle).
+client level=info t=25344 ev=retail site=66 text=networking:platform_friends:steam: failed to publish rich presence key 'status' as 'In Orbit
+client level=info t=25344 ev=retail site=66 text=networking:platform_friends:steam: failed to publish rich presence key 'steam_display' as '#RichStatus
+client level=info t=25547 ev=queuez stage=family0 result=seeded replaced=0x0000000000000000 rewrites=37
+client level=debug t=25563 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=25563 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=26547 ev=queuez stage=family0 result=seeded replaced=0x0000000000000000 rewrites=73
+client level=info t=27485 ev=retail site=55 text=world_controller: successfully changed world to: orbit_d2
+client level=debug t=27532 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=27532 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=27547 ev=queuez stage=family0 result=seeded replaced=0x0000000000000000 rewrites=101
+client level=info t=27625 ev=retail site=67 text=slice_set_loader: Successfully loaded pending slice-set '0 (HASH(0x8265820b))'.
+client level=info t=27625 ev=retail site=68 text=world_controller:matchmaking_manager: 'PUBLIC activity' Abort matchmaking called.
+client level=info t=27625 ev=retail site=69 text=world_controller:state:prepare_for_orbit: Waiting for bubble host port collision resolution.
+client level=info t=28547 ev=queuez stage=family0 result=seeded replaced=0x0000000000000000 rewrites=137
+client level=info t=29547 ev=queuez stage=family0 result=seeded replaced=0x0000000000000000 rewrites=173
+client level=info t=30547 ev=queuez stage=family0 result=seeded replaced=0x0000000000000000 rewrites=209
+client level=info t=30641 ev=retail site=70 text=networking:UPnP: Client completed with status: [2], port: [2003].
+client level=info t=30657 ev=retail site=71 text=networking:port_collision_resolver: Unsuccessful UPnP reservation, UPnP client state: [2], endpoint type: [2] port: [2003].
+client level=info t=30657 ev=retail site=0 text=networking:UPnP: Resetting UPnP client.
+client level=info t=30657 ev=retail site=72 text=networking:link: Swapping out endpoint type: [2] with collision resolved endpoint using port: [2003]
+client level=info t=30657 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [6049] ms in world controller state: [25] name: [bootflow:prepare_for_orbit]
+client level=info t=30657 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:prepare_for_orbit' for reason 'unavailable'.
+client level=info t=30657 ev=retail site=30 text=networking:link: Endpoint traffic is now: [enabled].
+client level=info t=30657 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:rejoin_activity' for reason 'unavailable'.
+client level=info t=30657 ev=retail site=73 text=networking:online:matchmaking:rejoin: Clearing rejoin parameters from account profile
+client level=info t=30657 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [0] ms in world controller state: [26] name: [bootflow:rejoin_activity]
+client level=info t=30657 ev=retail site=23 text=world_controller:state_manager: Leaving state 'bootflow:rejoin_activity' for reason 'unavailable'.
+client level=info t=30657 ev=retail site=3 text=world_controller:state_manager: Entering state 'character:signin' for reason 'unavailable'.
+client level=info t=30657 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(26)' to 'ENUM(30)'.
+client level=info t=30688 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(30)' to 'ENUM(31)'.
+client level=debug t=30688 ev=bitmap stage=seen handle=0x80B47FD1 result=ok
+client level=debug t=30688 ev=bitmap stage=seen handle=0x80D5E1BA result=ok
+client level=debug t=30688 ev=bitmap stage=seen handle=0x80B46A40 result=ok
+client level=debug t=30688 ev=bitmap stage=seen handle=0x80B46A46 result=ok
+client level=info t=30703 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(31)' to 'ENUM(19)'.
+client level=info t=30719 ev=retail site=68 text=world_controller:matchmaking_manager: 'PUBLIC activity' Abort matchmaking called.
+client level=info t=30719 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [68] ms in world controller state: [27] name: [character:signin]
+client level=info t=30719 ev=retail site=23 text=world_controller:state_manager: Leaving state 'character:signin' for reason 'unavailable'.
+client level=info t=30735 ev=retail site=31 text=world_controller:retail_datamine: Timed operation: [ENUM(15)], took: [69 ms], average: [69.000000 ms], min: [69.000000], max: [69.000000], count: [1]
+client level=info t=30735 ev=retail site=3 text=world_controller:state_manager: Entering state 'cleanup' for reason 'unavailable'.
+client level=info t=30735 ev=retail site=74 text=world_controller:state:cleanup: Synchronization flags=0x2
+client level=info t=30735 ev=retail site=75 text=world_controller:face_to_face_join: Clearing cached destination.
+client level=info t=30735 ev=retail site=76 text=world_controller:state:cleanup: Requested task mask: '0x00e0010c30fbdf3c'
+client level=info t=30735 ev=retail site=68 text=world_controller:matchmaking_manager: 'PRIVATE activity' Abort matchmaking called.
+client level=info t=30735 ev=retail site=68 text=world_controller:matchmaking_manager: 'PUBLIC activity' Abort matchmaking called.
+client level=info t=30735 ev=retail site=68 text=world_controller:matchmaking_manager: 'PUBLIC activity target' Abort matchmaking called.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(2)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(2)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(3)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(3)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(4)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(4)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(5)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(5)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(8)'.
+client level=info t=30735 ev=retail site=79 text=networking:managed_session:steam: [msi 0] managed_session allocated
+client level=info t=30735 ev=retail site=80 text=networking:managed_session: [#0] Creating managed session as host. session_type=fireteam, session_class=system-link-demonware, game_mode=4294967295, creation_flags=0, private_slots=0, public_slots=0
+client level=info t=30735 ev=retail site=81 text=networking:session: [fireteam:00000000:00000000] session state is changing from 'none' to 'host-established'.
+client level=info t=30735 ev=retail site=82 text=networking:logic:session: fireteam session host address changed, resetting state
+client level=info t=30735 ev=retail site=83 text=networking:session:membership: [fireteam:00000000:00000000] player-properties accepted for player #0 --  update=5, controller=0, update_flags=0|1|2|3|4|5|6|7|8
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(10)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(10)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(11)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(11)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(12)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(12)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(14)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(14)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(15)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(15)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(16)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(16)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(17)'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(19)'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(20)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(20)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(21)'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(28)'.
+client level=info t=30735 ev=retail site=84 text=world_controller:retail_datamine: About to attempt retail log upload. We have '305' events, dropped '0' from THIS session due to upload cap, and have '85' unique event IDs.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(29)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(29)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(34)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(34)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(54)'.
+client level=info t=30735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(54)' after '0ms'.
+client level=info t=30735 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(55)'.
+client level=info t=30735 ev=retail site=85 text=world_controller:state:cleanup: After 1ms, status: '2', tasks active: '0x00800000102a0100', pending: '0x0020010800c00200', requested: '0x00e0010c30fbdf3c'
+client level=info t=30735 ev=retail site=86 text=networking:session:membership:dump: [fireteam:00000000:00000000] update_number: 7, leader_peer_index: # 0, host_peer_index: # 0
+client level=info t=30735 ev=retail site=87 text=networking:session:membership:dump:   peers valid: 0x1, non-dormant: 0x1, changed: 0x1, removed: 0x0; players valid: 0x1, changed: 0x0, removed: 0x0
+client level=info t=30735 ev=retail site=88 text=networking:session:membership:dump:   peer # 0 a=[steamid:70000000000000001#00000000000000f5] s=            _joining o=-1 j=[2A633D3C-BF712820] amb=[XXXXXXXX-XXXXXXXX] pc=1 peer_name=<UNKNOWN PEER NAME> session_id= flags=0
+client level=info t=30735 ev=retail site=89 text=networking:managed_session: [#0][{                                       0}-00000000:00000000-0.0.0.0:0:0.0.0.0:0] Adding player [xuid=0x110000130aa9ec5][online-enabled=1][as_private=1] to session.
+client level=info t=30735 ev=retail site=90 text=networking:managed_session: [#0][{                                       0}-00000000:00000000-0.0.0.0:0:0.0.0.0:0] Modifying slot count from priv=0/pub=0/friend-only=0 to priv=0/pub=12/friend-only=1
+client level=debug t=30735 ev=send stage=stack bytes=35 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=info t=30828 ev=retail site=55 text=world_controller: successfully changed world to:
+client level=info t=30828 ev=retail site=91 text=networking:managed_session: [#0][{                                       0}-00000000:00000000-0.0.0.0:0:0.0.0.0:0] Asynchronously creating 'host' session, controller=0, game_mode=4294967295, flags=0x0000088b, private_slots=0, public_slots=12
+client level=info t=30828 ev=retail site=92 text=networking:managed_session: [msi 0] creating Steam lobby for new session
+client level=info t=30828 ev=retail site=93 text=networking:managed_session:steam: [msi 0] creating Steam Lobby for new session
+client level=info t=30828 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(19)' after '97ms'.
+client level=info t=30828 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(21)' after '97ms'.
+client level=info t=30828 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(22)'.
+client level=info t=30828 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(23)'.
+client level=info t=30828 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(23)' after '0ms'.
+client level=info t=30828 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(28)' after '97ms'.
+client level=info t=30828 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(53)'.
+client level=info t=30828 ev=retail site=52 text=world_controller:ui_stage: Stage-loading goal changed from 'ENUM(3)' to 'ENUM(5)'.
+client level=info t=30828 ev=retail site=20 text=high_water:demonware_heap: max used increased to 36720
+client level=debug t=30828 ev=send stage=stack bytes=200 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=30828 ev=retail site=90 text=networking:managed_session: [#0][{                                       0}-00000000:00000000-0.0.0.0:0:0.0.0.0:0] Modifying slot count from priv=0/pub=12/friend-only=1 to priv=0/pub=12/friend-only=0
+client level=debug t=30828 ev=send stage=stack bytes=40 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=info t=30828 ev=retail site=94 text=networking:managed_session: [#0][{                       74590868828323842}-76C996E9:4C25ACA1-steamid:70000000000000001#00000000000000f5] Asynchronous session creation completed successfully.
+client level=info t=30828 ev=retail site=95 text=networking:demonware:log:msg: file 'bdQoS\bdQoSProbe.cpp', line: '619', msg: Listening on securityID 3918973302
+client level=info t=30828 ev=retail site=96 text=networking:managed_session: [#0][{                       74590868828323842}-76C996E9:4C25ACA1-steamid:70000000000000001#00000000000000f5] Modify session, private_slots=0, public_slots=12, game_mode=4294967295, flags=0x0000008b
+client level=info t=30828 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(17)' after '104ms'.
+client level=info t=30828 ev=retail site=97 text=networking:logic:session: fireteam session identifier changed 00000000:00000000 -> 76C996E9:4C25ACA1, resetting state
+client level=info t=30828 ev=retail site=83 text=networking:session:membership: [fireteam:76C996E9:4C25ACA1] player-properties accepted for player #0 --  update=6, controller=0, update_flags=0|1|2|3|4|5|6|7|8
+client level=info t=30844 ev=retail site=98 text=networking:managed_session: [#0][{                       74590868828323842}-76C996E9:4C25ACA1-steamid:70000000000000001#00000000000000f5] Asynchronous session modify completed successfully.
+client level=info t=30844 ev=retail site=99 text=networking:managed_session: [#0][{                       74590868828323842}-76C996E9:4C25ACA1-steamid:70000000000000001#00000000000000f5] Starting add operation on '1' xuids.
+client level=info t=30844 ev=retail site=100 text=networking:managed_session: [#0][{                       74590868828323842}-76C996E9:4C25ACA1-steamid:70000000000000001#00000000000000f5] Submitting player add for xuid '0x110000130aa9ec5'.
+client level=info t=30844 ev=retail site=101 text=networking:managed_session: [#0][{                       74590868828323842}-76C996E9:4C25ACA1-steamid:70000000000000001#00000000000000f5] Player add completed successfully.
+client level=info t=30844 ev=retail site=102 text=networking:managed_session: [#0][{                       74590868828323842}-76C996E9:4C25ACA1-steamid:70000000000000001#00000000000000f5] Finished operating on '1' xuids.
+client level=debug t=30844 ev=send stage=stack bytes=50 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=30844 ev=retail site=103 text=networking:session:process-pending-joins: [fireteam:76C996E9:4C25ACA1] marking all peers in join [2A633D3C-BF712820] as joined
+client level=info t=30844 ev=retail site=86 text=networking:session:membership:dump: [fireteam:76C996E9:4C25ACA1] update_number: 11, leader_peer_index: # 0, host_peer_index: # 0
+client level=info t=30844 ev=retail site=87 text=networking:session:membership:dump:   peers valid: 0x1, non-dormant: 0x1, changed: 0x1, removed: 0x0; players valid: 0x1, changed: 0x0, removed: 0x0
+client level=info t=30844 ev=retail site=88 text=networking:session:membership:dump:   peer # 0 a=[steamid:70000000000000001#00000000000000f5] s=            _waiting o=-1 j=[2A633D3C-BF712820] amb=[XXXXXXXX-XXXXXXXX] pc=1 peer_name=<UNKNOWN PEER NAME> session_id= flags=0
+client level=info t=30844 ev=retail site=104 text=networking:session:process-pending-joins: [fireteam:76C996E9:4C25ACA1] marking all peers in join [2A633D3C-BF712820] as ready, [118] ms since peer [0] created, [30942] since join was queued
+client level=info t=30844 ev=retail site=86 text=networking:session:membership:dump: [fireteam:76C996E9:4C25ACA1] update_number: 12, leader_peer_index: # 0, host_peer_index: # 0
+client level=info t=30844 ev=retail site=87 text=networking:session:membership:dump:   peers valid: 0x1, non-dormant: 0x1, changed: 0x1, removed: 0x0; players valid: 0x1, changed: 0x0, removed: 0x0
+client level=info t=30844 ev=retail site=88 text=networking:session:membership:dump:   peer # 0 a=[steamid:70000000000000001#00000000000000f5] s=              _ready o=-1 j=[2A633D3C-BF712820] amb=[XXXXXXXX-XXXXXXXX] pc=1 peer_name=<UNKNOWN PEER NAME> session_id= flags=0
+client level=info t=30844 ev=retail site=105 text=networking:session:process-pending-joins: [fireteam:76C996E9:4C25ACA1] marking all peers in join [2A633D3C-BF712820] as established
+client level=info t=30844 ev=retail site=86 text=networking:session:membership:dump: [fireteam:76C996E9:4C25ACA1] update_number: 14, leader_peer_index: # 0, host_peer_index: # 0
+client level=info t=30844 ev=retail site=87 text=networking:session:membership:dump:   peers valid: 0x1, non-dormant: 0x1, changed: 0x1, removed: 0x0; players valid: 0x1, changed: 0x0, removed: 0x0
+client level=info t=30844 ev=retail site=88 text=networking:session:membership:dump:   peer # 0 a=[steamid:70000000000000001#00000000000000f5] s=        _established o=-1 j=[XXXXXXXX-XXXXXXXX] amb=[XXXXXXXX-XXXXXXXX] pc=1 peer_name=<UNKNOWN PEER NAME> session_id= flags=0
+client level=info t=30844 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(8)' after '124ms'.
+client level=info t=30844 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(9)'.
+client level=info t=30844 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(9)' after '0ms'.
+client level=info t=30860 ev=retail site=106 text=networking:logic:session: fireteam req. peer update [chk 0] (machine:Player@x64@unknown_pc_user@30_23_00_28_D8_14_8985) name_upd?- map?Y  conn_flags0|1|2|3 hierY flagsY
+client level=info t=30860 ev=retail site=107 text=networking:session:membership: [fireteam:76C996E9:4C25ACA1] peer-properties [chk 0] accepted for peer #0 [addr=steamid:70000000000000001#00000000000000f5] name=<UNKNOWN PEER NAME>, map status=_none, map progress=0
+client level=info t=30860 ev=retail site=108 text=networking:session:membership: up=393216bps (reliable 0.00), nat=1, ratings: conn=0, hst=0, cli=0, ctvty=0001 (complete=0001), party[FT]=6CB3A723-4AFE264F,party[PO]=none, flags= updated-flags=, client_error_state=0
+client level=info t=30860 ev=retail site=86 text=networking:session:membership:dump: [fireteam:76C996E9:4C25ACA1] update_number: 16, leader_peer_index: # 0, host_peer_index: # 0
+client level=info t=30860 ev=retail site=87 text=networking:session:membership:dump:   peers valid: 0x1, non-dormant: 0x1, changed: 0xffffffff, removed: 0x0; players valid: 0x1, changed: 0xffffffff, removed: 0x0
+client level=info t=30860 ev=retail site=88 text=networking:session:membership:dump:   peer # 0 a=[steamid:70000000000000001#00000000000000f5] s=        _established o=-1 j=[XXXXXXXX-XXXXXXXX] amb=[XXXXXXXX-XXXXXXXX] pc=1 peer_name=<UNKNOWN PEER NAME> session_id=Fri_08212026_035323_007356@x64@unknown_pc_user@30_23_00_28_D8_14_8985 flags=0
+client level=info t=31125 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(22)' after '305ms'.
+client level=info t=31125 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(35)'.
+client level=info t=31125 ev=retail site=77 text=world_controller:task_manager: Started   task 'ENUM(40)'.
+client level=info t=31125 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(40)' after '0ms'.
+client level=info t=31360 ev=retail site=55 text=world_controller: successfully changed world to: orbit_d2
+client level=info t=31360 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(35)' after '230ms'.
+client level=info t=31391 ev=queuez stage=family0_list countA=1 countB=1 first=0x9EAA300100100100/4 second=0x0000000000000000/0
+client level=debug t=31391 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=31391 ev=send stage=stack bytes=37 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=31407 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+server level=warn t=31407 ev=queuez stage=snapshot result=empty family=2
+client level=debug t=31407 ev=send stage=stack bytes=83 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=31407 ev=retail site=109 text=networking:investment:push:queuez: object-count of zero in [family_type ENUM(2), family_root_soid 0x9EAA300100100100, version 0, flags 0x01, object_count 0]
+client level=info t=31578 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(53)' after '757ms'.
+client level=debug t=32344 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=32344 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=33735 ev=retail site=78 text=world_controller:task_manager: Completed task 'ENUM(55)' after '3006ms'.
+client level=info t=33735 ev=retail site=22 text=world_controller:retail_datamine: Total time spent: [3007] ms in world controller state: [28] name: [cleanup]
+client level=info t=33735 ev=retail site=23 text=world_controller:state_manager: Leaving state 'cleanup' for reason 'unavailable'.
+client level=info t=33735 ev=retail site=3 text=world_controller:state_manager: Entering state 'setup:orbit' for reason 'unavailable'.
+client level=info t=33735 ev=retail site=110 text=world_controller:activity_selection_manager: Launching activity-selection '[slot 0]: 0x0000 (HASH(0x04f12a8a))(type: HASH(0x045a1edc))(grognok: Unknown)(destination: HASH(0x13a023bc)) for reason 'ENUM(2)'(selection_token: 1)' for reason 'ENUM(3)'.
+client level=info t=33735 ev=retail site=111 text=world_controller:slice_set_transition_manager: Mode changed from 'disabled' to 'fully_enabled'.
+client level=info t=33735 ev=retail site=31 text=world_controller:retail_datamine: Timed operation: [ENUM(14)], took: [20792 ms], average: [20792.000000 ms], min: [20792.000000], max: [20792.000000], count: [1]
+client level=info t=33735 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(19)' to 'ENUM(34)'.
+client level=info t=33735 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=info t=33735 ev=retail site=113 text=world_controller:slice_set_transition_manager: Starting a new transition of type 'transitioning:orbit' to 'PRV24.24 (HASH: 0x841b4ef7)'; token advanced to 001
+client level=info t=33735 ev=retail site=114 text=world_controller:slice_set_transition_manager:simulator: Transition to Orbit slice-set, advancing simulated phase directly to 'switch-now'.
+client level=info t=33735 ev=retail site=115 text=world_controller:slice_set_transition_manager: Region 'PRV24.24 (HASH: 0x841b4ef7)' is not yet loaded; the slice-set-switch task is not possible yet.
+client level=info t=33735 ev=retail site=116 text=world_controller:slice_set_transition_manager: Started precaching slice-set 'PRV24.24 (HASH: 0x841b4ef7)'.
+client level=info t=33735 ev=retail site=106 text=networking:logic:session: fireteam req. peer update [chk 1551954388] (machine:Player@x64@unknown_pc_user@30_23_00_28_D8_14_8985) name_upd?- map?N  conn_flags hierN flagsN
+client level=info t=33735 ev=retail site=107 text=networking:session:membership: [fireteam:76C996E9:4C25ACA1] peer-properties [chk 1551954388] accepted for peer #0 [addr=steamid:70000000000000001#00000000000000f5] name=<UNKNOWN PEER NAME>, map status=_none, map progress=0
+client level=info t=33735 ev=retail site=108 text=networking:session:membership: up=393216bps (reliable 0.00), nat=1, ratings: conn=0, hst=0, cli=0, ctvty=0001 (complete=0001), party[FT]=6CB3A723-4AFE264F,party[PO]=none, flags= updated-flags=, client_error_state=0
+client level=debug t=33735 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=33735 ev=send stage=stack bytes=35 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=info t=33735 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(34)' to 'ENUM(37)'.
+client level=debug t=33735 ev=send stage=stack bytes=32 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=33735 ev=send stage=stack bytes=36 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=33750 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=33750 ev=send stage=stack bytes=34 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=33969 ev=retail site=67 text=slice_set_loader: Successfully loaded pending slice-set '24 (HASH(0x841b4ef7))'.
+client level=info t=33969 ev=retail site=117 text=world_controller:slice_set_transition_manager: Region 'PRV24.24 (HASH: 0x841b4ef7)' is being assigned the slice-set-switch task.
+client level=info t=33985 ev=retail site=68 text=world_controller:matchmaking_manager: 'PUBLIC activity' Abort matchmaking called.
+client level=info t=33985 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(37)' to 'ENUM(38)'.
+client level=info t=33985 ev=bootflow stage=orbit_handoff result=released
+client level=info t=33985 ev=retail site=118 text=world_controller:slice_set_transition_manager: Stopping transition of type 'transitioning:orbit' due to completed
+client level=info t=33985 ev=retail site=106 text=networking:logic:session: fireteam req. peer update [chk 624542486] (machine:Player@x64@unknown_pc_user@30_23_00_28_D8_14_8985) name_upd?- map?Y  conn_flags hierN flagsN
+client level=info t=33985 ev=retail site=107 text=networking:session:membership: [fireteam:76C996E9:4C25ACA1] peer-properties [chk 624542486] accepted for peer #0 [addr=steamid:70000000000000001#00000000000000f5] name=<UNKNOWN PEER NAME>, map status=_precached, map progress=100
+client level=info t=33985 ev=retail site=108 text=networking:session:membership: up=393216bps (reliable 0.00), nat=1, ratings: conn=0, hst=0, cli=0, ctvty=0001 (complete=0001), party[FT]=6CB3A723-4AFE264F,party[PO]=none, flags= updated-flags=, client_error_state=0
+client level=debug t=38750 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=38750 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=40344 ev=retail site=66 text=networking:platform_friends:steam: failed to publish rich presence key 'connect' as '/connect:c59eaa300100100100000000000000000000000000000000000000000000000000000000
+client level=info t=40344 ev=retail site=66 text=networking:platform_friends:steam: failed to publish rich presence key 'steam_player_group' as '0x934d4e36d91f9726
+client level=info t=40344 ev=retail site=66 text=networking:platform_friends:steam: failed to publish rich presence key 'steam_player_group_size' as '1
+client level=debug t=43750 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=43766 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=45938 ev=send stage=stack bytes=192 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=48766 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=48766 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=53766 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=53782 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=58782 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=58782 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=62360 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=62375 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=63735 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=67360 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=67375 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=72375 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=72375 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=77375 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=77391 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=82391 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=82391 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=87391 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=87407 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=92391 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=92407 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=93750 ev=retail site=119 text=application_state: Suspend state changed from [active] to [partial]
+client level=info t=93750 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=94047 ev=send stage=stack bytes=192 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=97453 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=97485 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=102485 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=102532 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=107532 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=107563 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=112578 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=112610 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=117610 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=117641 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=122625 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=122657 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=123750 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=127625 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=127657 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=132672 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=132703 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=137703 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=137735 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=142750 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=142782 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=147782 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=147813 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=152657 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=152688 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=153750 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=157657 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=157703 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=162703 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=162735 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=167735 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=167782 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=172782 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=172813 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=177828 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=177860 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=182688 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=182735 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=183766 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=187703 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=187735 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=192735 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=192782 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=197782 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=197813 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=202828 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=202860 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=207860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=207891 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=212735 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=212766 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=213766 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=217735 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=217782 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=222782 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=222813 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=227813 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=227860 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=232860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=232891 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=237907 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=237938 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=242766 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=242813 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=243766 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=247782 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=247813 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=252813 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=252844 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=257860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=257891 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=260563 ev=send stage=stack bytes=129 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=262891 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=262938 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=267938 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=267969 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=272813 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=272844 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=273782 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=277813 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=277844 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=282860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=282891 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=287891 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=287922 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=292938 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=292969 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=297969 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=298000 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=302844 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=302875 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=303782 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=307860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=307891 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=312891 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=312922 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=317938 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=317969 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=322969 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=323000 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=328016 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=328047 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=332891 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=332922 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=333782 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=337891 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=337922 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=342938 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=342969 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=347969 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=348000 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=353016 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=353047 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=358047 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=358078 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=362922 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=362953 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=363782 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=367922 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=367969 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=372969 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=373000 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=378000 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=378047 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=383047 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=383078 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=388078 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=388125 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=392953 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=392985 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=393797 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=397969 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=398000 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=403000 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=403032 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=408047 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=408078 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=409953 ev=retail site=119 text=application_state: Suspend state changed from [partial] to [active]
+client level=debug t=413047 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=413063 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=416266 ev=send stage=stack bytes=130 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=418063 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=418063 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=422828 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=422828 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=423797 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=427828 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=427844 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=432844 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=432844 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=437844 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=437860 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=442860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=442860 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=447875 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=447875 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=452860 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=452860 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=453797 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=457860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=457860 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=462860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=462875 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=467860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=467875 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=472875 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=472875 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=477875 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=477891 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=482875 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=482891 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=483813 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=487875 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=487891 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=492891 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=492891 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=497907 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=497907 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=502907 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=502922 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=507922 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=507922 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=512907 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=512922 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=513813 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=517907 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=517922 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=522922 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=522922 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=526516 ev=retail site=119 text=application_state: Suspend state changed from [active] to [partial]
+client level=debug t=527969 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=528016 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=533016 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=533047 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=538047 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=538094 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=543094 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=543125 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=543157 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=543203 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=543828 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=548141 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=548172 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=553172 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=553203 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=557485 ev=retail site=119 text=application_state: Suspend state changed from [partial] to [active]
+client level=debug t=558172 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=558188 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=563188 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=563188 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=564625 ev=retail site=119 text=application_state: Suspend state changed from [active] to [partial]
+client level=debug t=568219 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=568250 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=572922 ev=retail site=119 text=application_state: Suspend state changed from [partial] to [active]
+client level=debug t=573016 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=573016 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=573828 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=578016 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=578016 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=583016 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=583032 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=584344 ev=retail site=119 text=application_state: Suspend state changed from [active] to [partial]
+client level=debug t=588078 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=588125 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=593125 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=593157 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=598172 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=598203 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=603203 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=603235 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=603266 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=603297 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=603844 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=608282 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=608313 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=613313 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=613344 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=618360 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=618391 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=623391 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=623438 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=628438 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=628469 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=633313 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=633344 ev=send stage=stack bytes=41 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=633750 ev=send stage=stack bytes=36 rva=3916BE,3ECAC9,1746642,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=633782 ev=send stage=stack bytes=34 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=info t=633844 ev=retail site=112 text=world_controller:slice_set_transition_manager: Failed to find the Orbit slice-set name for destination 'HASH(0x13a023bc)', so we're falling back to a new character (Orbit destination 'HASH(0x59ad083e)', slice-set 'HASH(0x841b4ef7)').
+client level=debug t=638782 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=638813 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=643828 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=643860 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=648860 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=648891 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
+client level=debug t=653907 ev=send stage=stack bytes=28 rva=3914E2,3EC9FD,174662B,1746A14,174B344,174B0C3,1748A76,1748153,1748049,E7658F,16CCE2C,16CCE5E,31B004,318991,31B241,3537B3,353874
+client level=debug t=653938 ev=send stage=stack bytes=30 rva=448514,16D23BD,31B004,318991,31B241,3537B3,353874
