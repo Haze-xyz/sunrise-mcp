@@ -35,6 +35,7 @@
 import { copyFile, readFile, rename, stat, writeFile } from 'node:fs/promises';
 
 import type { RunRow } from './endpoint.js';
+import { readSettings } from './install.js';
 
 /** The classes this game authors, lowercase, exactly as `character.list` prints them. */
 export const CHARACTER_CLASSES = ['titan', 'hunter', 'warlock'] as const;
@@ -347,15 +348,28 @@ export async function disableCharacterSelectHold(settingsPath: string): Promise<
 
   const rewrite = rewriteHoldCharacterSelect(text);
   if (rewrite.occurrences === 0) {
+    // Why the same missing key gets two different answers. `hold_character_select` is an addition of
+    // the private fork, and so is `console_endpoint`; a settings file with neither was written by a
+    // build that has no console endpoint at all, which makes "add this key by hand" advice that
+    // cannot work -- the DLL that would read it is not there. Telling those two apart is the
+    // difference between naming the cause and describing a symptom, and describing the symptom is
+    // exactly what the first outside user of this server was handed.
+    const looksLikeFork = readSettings(text).hasConsoleEndpoint;
     return {
       status: 'refused',
       path: settingsPath,
-      message:
-        `${settingsPath} has no "${HOLD_SETTING_KEY}" key, and the game's own default for it is ` +
-        'true, which parks the client on the character-select screen no matter what character is ' +
-        `chosen. Add "${HOLD_SETTING_KEY}": false to the "client" object in that file and call ` +
-        'game_enter again. This was not added automatically: the key is absent, so adding it means ' +
-        'editing the shape of a configuration file rather than one value in it. Nothing was launched.',
+      message: looksLikeFork
+        ? `${settingsPath} has no "${HOLD_SETTING_KEY}" key, and the game's own default for it is ` +
+          'true, which parks the client on the character-select screen no matter what character is ' +
+          `chosen. Add "${HOLD_SETTING_KEY}": false to the "client" object in that file and call ` +
+          'game_enter again. This was not added automatically: the key is absent, so adding it means ' +
+          'editing the shape of a configuration file rather than one value in it. Nothing was launched.'
+        : `${settingsPath} carries neither "${HOLD_SETTING_KEY}" nor "console_endpoint". Both are ` +
+          'additions of the private Sunrise fork this server pairs with, so this install was built ' +
+          'from upstream Sunrise or another fork, and nothing this server drives exists in it -- ' +
+          'there is no console endpoint to connect to, and adding the key by hand would change ' +
+          'nothing because no code reads it. Deploy a steam_api64.dll built from the fork; ' +
+          'install_check reports the same thing in full. Nothing was launched.',
     };
   }
   if (rewrite.occurrences > 1) {

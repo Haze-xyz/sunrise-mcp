@@ -62,6 +62,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { CAPABILITIES } from './capabilities/index.js';
 import { buildContext } from './capabilities/context.js';
 import { registerCapabilities } from './capabilities/register.js';
+import { inspectInstall } from './install.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -951,6 +952,28 @@ server.registerTool(
 // Enfichable capabilities: each console-composed tool registers itself here, so adding one is a
 // file plus a line in capabilities/index.ts -- never an edit to the tools above. See
 // docs/superpowers/specs/2026-08-21-sunrise-mcp-capabilities-plugin-design.md.
+server.registerTool(
+  'install_check',
+  {
+    description:
+      "Reports what the Sunrise install this server is configured for actually is, without touching the game. " +
+      'Answer this before believing any other tool\'s failure: every one of them assumes a game directory, a ' +
+      'settings file at one exact path, and keys in it that only the private fork\'s DLL has -- and when an ' +
+      'assumption is wrong they report it as a game failure (a launch that did not happen, a refused connection, ' +
+      'a settings key to add by hand) rather than as the configuration problem it is. ' +
+      'The verdict is one of: ok; gameDirNotFound (no directory, or one with no destiny2.exe in it -- the report ' +
+      'says whether SUNRISE_GAME_DIR named it or this server fell back to a path of its own); settingsMissing ' +
+      '(no bin\\x64\\Sunrise\\settings.json, which is the file the DLL reads -- not bin\\x64\\settings.json, which ' +
+      'nothing reads); settingsUnreadable; notForkBuild (neither "console_endpoint" nor "hold_character_select" ' +
+      'is in the settings, so this was built from upstream Sunrise and none of the console endpoint, mem.* or ' +
+      'character.* exists in it); endpointDisabled ("console_endpoint" is there with "enabled": false, which is ' +
+      'what the fork ships by default -- every tool here then fails with a refused connection and nothing in the ' +
+      'game is wrong). The report also carries the settings `version` field, which the game migrates on its own ' +
+      'and which is how a settings file written by a newer build is told from a broken one.',
+  },
+  async (): Promise<CallToolResult> => textResult(await inspectInstall()),
+);
+
 registerCapabilities(server, buildContext(endpoint), CAPABILITIES);
 
 async function main(): Promise<void> {

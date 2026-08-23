@@ -147,7 +147,10 @@ const SETTINGS = `{
     "hold_spawn": true,
     "spawn_hold_ms": 30000
   },
-  "server": { "bap_port": 30974 }
+  "server": {
+    "bap_port": 30974,
+    "console_endpoint": { "enabled": true, "port": 30975 }
+  }
 }
 `;
 
@@ -401,6 +404,29 @@ async function main() {
       const missing = await disableCharacterSelectHold(path.join(dir, 'does-not-exist.json'));
       assert.equal(missing.status, 'refused');
       assert.ok(missing.message.includes('does-not-exist.json'));
+    });
+
+    await test('a settings file with neither fork key is refused as a build problem, not a missing line', async () => {
+      // The distinction this case exists for. `hold_character_select` absent from a file that still
+      // carries `console_endpoint` is a line someone deleted, and "add it back" is useful advice.
+      // Absent from a file that has neither is a DLL built from upstream, where adding the key
+      // changes nothing because no code reads it -- and telling that reader to edit their settings
+      // is exactly the misleading answer the first outside user of this server was handed.
+      const upstreamPath = path.join(dir, 'upstream.json');
+      const upstreamShaped = SETTINGS.replace(`    "${HOLD_SETTING_KEY}": true,\n`, '').replace(
+        '    "console_endpoint": { "enabled": true, "port": 30975 }\n',
+        '',
+      ).replace('"bap_port": 30974,', '"bap_port": 30974');
+      await writeFile(upstreamPath, upstreamShaped, 'utf8');
+      const refused = await disableCharacterSelectHold(upstreamPath);
+      assert.equal(refused.status, 'refused');
+      assert.ok(refused.message.includes('console_endpoint'), 'it must name the other missing fork key');
+      assert.ok(refused.message.includes('steam_api64.dll'), 'it must say what to actually do');
+      assert.ok(
+        !refused.message.includes('Add "'),
+        'it must NOT tell the reader to add a key that nothing would read',
+      );
+      assert.equal(await readFile(upstreamPath, 'utf8'), upstreamShaped, 'a refusal must not write');
     });
 
     // -----------------------------------------------------------------------

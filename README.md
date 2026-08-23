@@ -60,6 +60,26 @@ Everything is env vars, with Windows-appropriate defaults:
 | `SUNRISE_MSBUILD` | *(found via vswhere)* | An explicit `MSBuild.exe`, when vswhere finds the wrong install or none. |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | *(none — stays quiet)* | Where `sync-fork` sends its summary. Both must be set. |
 
+## When nothing connects
+
+Run `install_check` first. Every other tool assumes a game directory, a settings file at one exact
+path, and keys in it that only the fork's DLL has — and when an assumption is wrong they report a
+*game* failure rather than the configuration problem it is.
+
+The two answers worth knowing in advance:
+
+- **`endpointDisabled`** — the fork ships `"console_endpoint": { "enabled": false }`. A clean
+  install of the fork therefore has no listener, and every tool here fails with a refused
+  connection while nothing in the game is wrong. Set `"enabled": true` under `server` >
+  `console_endpoint` in `<game dir>\bin\x64\Sunrise\settings.json` and restart the game.
+- **`notForkBuild`** — the settings carry neither `console_endpoint` nor
+  `hold_character_select`, so the DLL is not built from the fork and nothing this server drives
+  exists in it. Adding the keys by hand changes nothing; no code reads them.
+
+`install_check` also reports the settings `version` field. The game migrates that file on its own
+(upstream's `settings_upgrade.h`, bundled default 6 → 8), so a file written by a newer build is not
+a broken one — and this server no longer treats it as such.
+
 ## Keeping the fork current
 
 Every tool here talks to a DLL built from the Sunrise fork, so a fork that has fallen behind
@@ -114,6 +134,7 @@ Six base tools, all over the console endpoint:
 |---|---|---|
 | `console_run` | `line: string` | The endpoint's structured response: `status`, `summary`, `rows`. |
 | `console_describe` | — | The full command/variable registry. |
+| `install_check` | — | What this install actually is, before believing any other tool's failure: `ok`, `gameDirNotFound`, `settingsMissing`, `settingsUnreadable`, `notForkBuild`, or `endpointDisabled`. Touches nothing. |
 | `game_launch` | — | Starts `destiny2.exe` (killing any existing instance first) and waits for its window. |
 | `game_kill` | — | `taskkill /IM destiny2.exe /F`, then waits for the process to actually leave the process table. Safe to call when the game isn't running. |
 | `log_read` | `lines?: number` | The tail of `sunrise.log` (default 200 lines, capped at 1000). |
