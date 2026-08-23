@@ -15,7 +15,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -25,6 +26,7 @@ import {
   parseLogLine,
 } from '../dist/log-parse.js';
 import { cursorState, decodeCursor, encodeCursor, fileIdentity } from '../dist/log-cursor.js';
+import { readWindow } from '../dist/log-stream.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(HERE, 'fixtures', 'sunrise-882.log');
@@ -239,6 +241,98 @@ async function main() {
     const left = fileIdentity({ ino: 15481123719086431n, birthtimeMs: 1000, size: 10 });
     const right = fileIdentity({ ino: 15481123719086433n, birthtimeMs: 1000, size: 10 });
     assert.notEqual(left.id, right.id);
+  });
+
+  await test('a first read returns everything and hands back a usable cursor', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'log-stream-'));
+    const file = path.join(dir, 'sunrise.log');
+    await writeFile(file, 'client level=info t=1 ev=a\r\nclient level=info t=2 ev=b\r\n', 'utf8');
+    const first = await readWindow(file, {});
+    assert.equal(first.state, 'fresh');
+    assert.equal(first.records.length, 2);
+    assert.equal(first.dropped, 0);
+
+    await appendFile(file, 'client level=info t=3 ev=c\r\n', 'utf8');
+    const second = await readWindow(file, { since: first.cursor });
+    assert.equal(second.state, 'resumable');
+    assert.equal(second.records.length, 1);
+    assert.equal(second.records[0].ev, 'c');
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  await test('an incomplete trailing line is not consumed', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'log-stream-'));
+    const file = path.join(dir, 'sunrise.log');
+    await writeFile(file, 'client level=info t=1 ev=a\r\nclient level=info t=2 ev=b', 'utf8');
+    const first = await readWindow(file, {});
+    assert.equal(first.records.length, 1, 'the half-written line must wait for its newline');
+
+    await appendFile(file, ' result=ok\r\n', 'utf8');
+    const second = await readWindow(file, { since: first.cursor });
+    assert.equal(second.records.length, 1);
+    assert.equal(second.records[0].fields.result, 'ok');
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  await test('a real rotation is reported, and the read restarts from the top', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'log-stream-'));
+    const file = path.join(dir, 'sunrise.log');
+    await writeFile(file, 'client level=info t=1 ev=a\r\n'.repeat(50), 'utf8');
+    const first = await readWindow(file, {});
+    assert.equal(first.records.length, 50);
+
+    // What the game does: rename, then create a fresh, shorter file under the same name.
+    await rm(`${file}.old`, { force: true });
+    await writeFile(`${file}.old`, await readFile(file, 'utf8'), 'utf8');
+    await rm(file, { force: true });
+    await writeFile(file, 'client level=info t=1 ev=z\r\n', 'utf8');
+
+    const second = await readWindow(file, { since: first.cursor });
+    assert.equal(second.state, 'rotated');
+    assert.equal(second.records.length, 1);
+    assert.equal(second.records[0].ev, 'z');
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  await test('the filter is applied while reading, not after', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'log-stream-'));
+    const file = path.join(dir, 'sunrise.log');
+    const lines = [];
+    for (let i = 0; i < 100; i += 1) {
+      lines.push(`client level=${i % 2 === 0 ? 'debug' : 'info'} t=${i} ev=${i % 2 === 0 ? 'send' : 'queuez'}\r\n`);
+    }
+    await writeFile(file, lines.join(''), 'utf8');
+    const result = await readWindow(file, { filter: { ev: ['queuez'] } });
+    assert.equal(result.records.length, 50);
+    assert.equal(result.scanned, 100);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  await test('the output cap is said, and the cursor resumes at the first line left behind', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'log-stream-'));
+    const file = path.join(dir, 'sunrise.log');
+    const lines = [];
+    for (let i = 0; i < 30; i += 1) lines.push(`client level=info t=${i} ev=a\r\n`);
+    await writeFile(file, lines.join(''), 'utf8');
+
+    const first = await readWindow(file, { maxLines: 10 });
+    assert.equal(first.records.length, 10);
+    assert.equal(first.dropped, 20);
+    assert.equal(first.records[9].t, 9);
+
+    const second = await readWindow(file, { since: first.cursor, maxLines: 10 });
+    assert.equal(second.records[0].t, 10, 'nothing may be lost at the cap');
+    assert.equal(second.dropped, 10);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  await test('a missing log says so instead of throwing something unreadable', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'log-stream-'));
+    await assert.rejects(
+      () => readWindow(path.join(dir, 'nope.log'), {}),
+      (err) => err instanceof Error && err.message.includes('not found'),
+    );
+    await rm(dir, { recursive: true, force: true });
   });
 
   const failed = results.filter((r) => !r.ok);
