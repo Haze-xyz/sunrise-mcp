@@ -19,11 +19,12 @@
  * tested against a table. This file only gathers the facts and carries them out.
  */
 
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { BUILD_MAX_BUFFER, git, run } from './run-command.js';
+import { buildSolution } from './build.js';
+import { git, run } from './run-command.js';
 import {
   decideSyncOutcome,
   describeOutcome,
@@ -60,10 +61,6 @@ const DEFAULT_CREDENTIAL_HELPER = '!gh auth git-credential';
 const UPSTREAM_REF = 'refs/sunrise-sync/upstream';
 /** The env var that names the fork checkout, so nothing here has a machine's path built into it. */
 const FORK_DIR_VAR = 'SUNRISE_FORK_DIR';
-/** An explicit MSBuild path, for a machine where vswhere is absent or the wrong install wins. */
-const MSBUILD_VAR = 'SUNRISE_MSBUILD';
-/** vswhere ships with every Visual Studio installer, at a fixed path. */
-const VSWHERE = 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe';
 
 
 export interface SyncOptions {
@@ -148,64 +145,8 @@ export async function resolveForkDir(
   );
 }
 
-/** Finds MSBuild, or reports null so the run says "unproven" instead of pretending it built. */
-export async function findMsbuild(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
-  const explicit = env[MSBUILD_VAR];
-  if (explicit && (await exists(explicit))) return explicit;
 
-  const vswhere = process.platform === 'win32' ? VSWHERE : `/mnt/c/${VSWHERE.slice(3).replace(/\\/g, '/')}`;
-  if (!(await exists(vswhere))) return null;
-  const found = await run(vswhere, [
-    '-latest',
-    '-products',
-    '*',
-    '-requires',
-    'Microsoft.Component.MSBuild',
-    '-property',
-    'installationPath',
-  ]);
-  const installRoot = found.stdout.trim().split(/\r?\n/)[0];
-  if (found.code !== 0 || !installRoot) return null;
 
-  const msbuild = `${installRoot}\\MSBuild\\Current\\Bin\\MSBuild.exe`;
-  const local =
-    process.platform === 'win32' ? msbuild : `/mnt/${msbuild[0]?.toLowerCase()}/${msbuild.slice(3).replace(/\\/g, '/')}`;
-  return (await exists(local)) ? local : null;
-}
-
-/**
- * The path to hand to a Windows MSBuild, which is not the path this process uses when it runs under
- * WSL -- there, a Linux path has to become a `\\wsl.localhost\...` UNC one. `wslpath` does that
- * conversion correctly for every mount layout, which hand-built string surgery does not.
- */
-async function toWindowsPath(target: string): Promise<string> {
-  if (process.platform === 'win32') return target;
-  const converted = await run('wslpath', ['-w', target]);
-  if (converted.code !== 0) throw new Error(`wslpath could not convert ${target}: ${converted.stderr.trim()}`);
-  return converted.stdout.trim();
-}
-
-/** Compiler error lines, which are the only part of a 1500-line build log worth putting in a message. */
-export function extractBuildErrors(log: string): string[] {
-  const seen = new Set<string>();
-  for (const line of log.split(/\r?\n/)) {
-    if (/\berror [A-Z]+\d+\b/.test(line)) seen.add(line.trim());
-    if (seen.size >= 20) break;
-  }
-  return [...seen];
-}
-
-/**
- * MSBuild's own verdict.
- *
- * The exit code alone is not enough here: this project is built through a wrapper often enough that
- * the banner is the thing people read, and `/v:minimal` is known to omit it on this installation
- * even on success. So both are required to agree -- a zero exit *and* the banner -- and anything
- * else counts as a failure worth a human's attention rather than a pass.
- */
-export function buildSucceeded(code: number, log: string): boolean {
-  return code === 0 && /^Build succeeded\.$/m.test(log);
-}
 
 /**
  * Fetches upstream, merges it in a throwaway worktree, builds, and publishes only a green result.
@@ -301,25 +242,14 @@ export async function runSync(options: SyncOptions): Promise<SyncRun> {
     log(`merge clean: ${mergedCommit.slice(0, 7)}`);
 
     if (wantBuild) {
-      const msbuild = await findMsbuild();
-      if (!msbuild) {
-        log('no MSBuild found, so the merge stays unproven (set SUNRISE_MSBUILD to point at one)');
-      } else {
-        const solution = await toWindowsPath(path.join(worktree, 'Sunrise.sln'));
-        log(`building ${solution}`);
-        const built = await run(
-          msbuild,
-          [solution, '/m', '/v:normal', '/p:Configuration=Release', '/p:Platform=x64'],
-          undefined,
-          BUILD_MAX_BUFFER,
-        );
-        const buildLog = `${built.stdout}\n${built.stderr}`;
-        buildLogPath = path.join(worktree, '..', `sunrise-sync-build-${process.pid}.log`);
-        await writeFile(buildLogPath, buildLog, 'utf8');
-        observation.buildSucceeded = buildSucceeded(built.code, buildLog);
-        buildErrors = observation.buildSucceeded ? [] : extractBuildErrors(buildLog);
-        log(`build: ${observation.buildSucceeded ? 'succeeded' : 'FAILED'} (log at ${buildLogPath})`);
-      }
+      log(`building ${path.join(worktree, 'Sunrise.sln')}`);
+      const built = await buildSolution(path.join(worktree, 'Sunrise.sln'));
+      buildLogPath = built.logPath;
+      buildErrors = built.errors;
+      // `attempted: false` means no MSBuild on this machine. Left as null rather than false: an
+      // unbuilt merge is unproven, and calling it broken would be a different, wrong claim.
+      observation.buildSucceeded = built.attempted ? built.succeeded : null;
+      log(built.message);
     }
 
     const outcome = decideSyncOutcome(observation);

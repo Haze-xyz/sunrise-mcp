@@ -25,7 +25,8 @@ import {
   mayPublish,
   shouldNotify,
 } from '../dist/sync-decision.js';
-import { buildSucceeded, extractBuildErrors, looksLikeForkCheckout, resolveForkDir } from '../dist/sync.js';
+import { looksLikeForkCheckout, resolveForkDir } from '../dist/sync.js';
+import { buildSucceeded, extractBuildErrors } from '../dist/build.js';
 import { clampBody, notifyTelegram } from '../dist/notify.js';
 
 const results = [];

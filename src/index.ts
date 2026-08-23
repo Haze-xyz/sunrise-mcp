@@ -59,10 +59,14 @@ import { getGameProcessInfo } from './tasklist.js';
 import { clearPressRecord, resolvePressedThisSession, writePressRecord, type PressRecord } from './press-record.js';
 import { createSerializer } from './serialize.js';
 import { setTimeout as sleep } from 'node:timers/promises';
+import path from 'node:path';
 import { CAPABILITIES } from './capabilities/index.js';
 import { buildContext } from './capabilities/context.js';
 import { registerCapabilities } from './capabilities/register.js';
-import { inspectInstall } from './install.js';
+import { inspectInstall, resolveGameDirWithSource } from './install.js';
+import { resolveForkDir } from './sync.js';
+import { buildSolution } from './build.js';
+import { deployDll } from './deploy.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -972,6 +976,63 @@ server.registerTool(
       'and which is how a settings file written by a newer build is told from a broken one.',
   },
   async (): Promise<CallToolResult> => textResult(await inspectInstall()),
+);
+
+server.registerTool(
+  'fork_build',
+  {
+    description:
+      'Compiles the Sunrise fork (Release x64) and reports whether it built, without touching the ' +
+      'running game. This is the first half of the loop an agent needs to change the C++ on its own: ' +
+      'edit, fork_build, game_kill, dll_deploy, game_enter -- the endpoint client reconnects by ' +
+      'itself once the game is back. ' +
+      'Returns succeeded with the log path, or the first compiler error lines when it did not. ' +
+      'A response with attempted=false means no MSBuild was found on this machine, which is ' +
+      '"nothing was proven", not "the code is broken" -- point SUNRISE_MSBUILD at one. ' +
+      'The checkout comes from the repo argument, then SUNRISE_FORK_DIR, then the current ' +
+      'directory; there is no built-in path.',
+    inputSchema: {
+      repo: z
+        .string()
+        .optional()
+        .describe('The Sunrise fork checkout to build. Defaults to SUNRISE_FORK_DIR, then the current directory.'),
+    },
+  },
+  async ({ repo }: { repo?: string | undefined }): Promise<CallToolResult> => {
+    const forkDir = await resolveForkDir(repo);
+    const built = await buildSolution(path.win32.join(forkDir, 'Sunrise.sln'));
+    return textResult({ forkDir, ...built });
+  },
+);
+
+server.registerTool(
+  'dll_deploy',
+  {
+    description:
+      "Copies the fork's freshly built steam_api64.dll into the game, from build\\x64\\Release to " +
+      'the install\'s bin\\x64 (not the game root: the loader looks in bin\\x64). Returns the byte ' +
+      'count and a SHA-256 prefix of what is now in place, so a caller can prove which build is ' +
+      'loaded rather than assume the deploy happened. ' +
+      'It refuses while destiny2.exe is running, and that is not a policy -- Windows holds an open ' +
+      'handle on the DLL, so the copy would fail partway and leave the install carrying neither the ' +
+      'old binary nor the new one. Call game_kill first; it waits for the process to actually leave ' +
+      'the process table. The DLL that was there before this server ever ran is kept beside it as ' +
+      'steam_api64.dll.sunrise-mcp-backup, written once and never overwritten. ' +
+      'The game loads the DLL at startup, so a deploy takes effect on the next launch, never on the ' +
+      'running process.',
+    inputSchema: {
+      repo: z
+        .string()
+        .optional()
+        .describe('The Sunrise fork checkout holding build\\x64\\Release. Defaults to SUNRISE_FORK_DIR, then the current directory.'),
+    },
+  },
+  async ({ repo }: { repo?: string | undefined }): Promise<CallToolResult> => {
+    const forkDir = await resolveForkDir(repo);
+    const { dir: gameDir } = resolveGameDirWithSource();
+    const result = await deployDll(forkDir, gameDir);
+    return result.status === 'refused' ? errorResult(new Error(result.message)) : textResult(result);
+  },
 );
 
 registerCapabilities(server, buildContext(endpoint), CAPABILITIES);
