@@ -40,7 +40,8 @@ export interface ReadWindowResult {
 
 /**
  * @param logPath Path to the log, in the running platform's own form (it goes to fs).
- * @throws If the file does not exist -- which means the game has never run.
+ * @throws If the log cannot be stat'd at all. The message names the most common cause by far --
+ *         the game has never run -- but a permission or device error lands here too.
  */
 export async function readWindow(logPath: string, options: ReadWindowOptions): Promise<ReadWindowResult> {
   let identity: FileIdentity;
@@ -91,13 +92,17 @@ export async function readWindow(logPath: string, options: ReadWindowOptions): P
         if (trimmed.length > 0) {
           const record = parseLogLine(trimmed);
           if (filter === undefined || matchesFilter(record, filter)) {
-            const full = records.length >= maxLines || emittedBytes + trimmed.length > maxBytes;
+            // Buffer.byteLength, not .length: the cap is in bytes, and the very next statement
+            // measures the same line in bytes to advance the offset. A function that counts one
+            // line two different ways is wrong about one of them.
+            const trimmedBytes = Buffer.byteLength(trimmed, 'utf8');
+            const full = records.length >= maxLines || emittedBytes + trimmedBytes > maxBytes;
             if (full) {
               dropped += 1;
               if (resumeAt === null) resumeAt = lineStart;
             } else {
               records.push(record);
-              emittedBytes += trimmed.length;
+              emittedBytes += trimmedBytes;
             }
           }
         }
