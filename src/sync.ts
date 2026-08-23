@@ -19,11 +19,11 @@
  * tested against a table. This file only gathers the facts and carries them out.
  */
 
-import { execFile } from 'node:child_process';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { BUILD_MAX_BUFFER, git, run } from './run-command.js';
 import {
   decideSyncOutcome,
   describeOutcome,
@@ -65,9 +65,6 @@ const MSBUILD_VAR = 'SUNRISE_MSBUILD';
 /** vswhere ships with every Visual Studio installer, at a fixed path. */
 const VSWHERE = 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe';
 
-/** A full build log is ~1.5 MB of text; execFile's 1 MB default would truncate it mid-run. */
-const BUILD_MAX_BUFFER = 64 * 1024 * 1024;
-const GIT_MAX_BUFFER = 16 * 1024 * 1024;
 
 export interface SyncOptions {
   /** The fork checkout to update. */
@@ -104,33 +101,6 @@ export interface SyncRun {
   buildErrors: readonly string[];
 }
 
-interface RunResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
-
-/** Runs a command, resolving with its exit code instead of throwing on a non-zero one. */
-function run(file: string, args: readonly string[], cwd?: string, maxBuffer = GIT_MAX_BUFFER): Promise<RunResult> {
-  return new Promise((resolve) => {
-    execFile(
-      file,
-      [...args],
-      { cwd, maxBuffer, windowsHide: true },
-      (error, stdout, stderr) => {
-        const code =
-          error && typeof (error as { code?: unknown }).code === 'number'
-            ? (error as { code: number }).code
-            : error
-              ? 1
-              : 0;
-        resolve({ code, stdout: stdout.toString(), stderr: stderr.toString() });
-      },
-    );
-  });
-}
-
-const git = (args: readonly string[], cwd: string): Promise<RunResult> => run('git', args, cwd);
 
 async function exists(target: string): Promise<boolean> {
   try {

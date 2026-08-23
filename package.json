@@ -18,7 +18,9 @@
     "test:capabilities": "npm run build && node scripts/mem-facade-smoke.mjs && node scripts/struct-read-smoke.mjs && node scripts/context-smoke.mjs && node scripts/register-smoke.mjs",
     "sync-fork": "npm run build && node scripts/sync-fork.mjs",
     "test:sync": "npm run build && node scripts/sync-decision-smoke.mjs",
-    "test:install": "npm run build && node scripts/install-smoke.mjs"
+    "test:install": "npm run build && node scripts/install-smoke.mjs",
+    "overlay-apply": "npm run build && node scripts/overlay-apply.mjs",
+    "test:overlay": "npm run build && node scripts/overlay-smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
