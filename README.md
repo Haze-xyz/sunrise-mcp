@@ -9,43 +9,59 @@ Two things it's for, in priority order:
 2. **Control** — get the game into the world (past the title screen, optionally as a named
    character) and drive input once it's in.
 
-It exposes six base MCP tools over the console endpoint, plus an extensible **capabilities**
+It exposes seven base MCP tools — six over the console endpoint, plus `install_check`, which
+touches nothing and answers why the other six are failing — and an extensible **capabilities**
 layer for composing them into richer tools without touching the game's C++ at all.
 
-## Requirements & where it runs
+## From nothing to a game that answers
 
-- **A Sunrise install built from the private Sunrise fork this repo pairs with** —
-  `Haze-xyz/Sunrise-mcp-fork` (its default branch, `layer2-entry`) — not from upstream
-  `stanuwu/Sunrise`.
-  Everything this server talks to — the console endpoint (the `127.0.0.1`-bound listener), the
-  `mem.*` primitives, `character.*`, forced-key input — is that fork's addition to the
-  `steam_api64.dll`; upstream Sunrise has none of it, so against a stock install nothing here
-  connects and every tool fails the same way (connection refused). You need the game with that
-  fork's DLL deployed — so access to that fork (or a DLL built from it) — before any of this is
-  useful.
-- Node ≥ 20.
-- The server must run on **whatever machine can reach the game's loopback socket** — and since
-  Destiny 2 is Windows-only, that's Windows. This isn't a preference, it's what the endpoint is:
+Six steps. The whole thing is one evening, and every step has a command.
+
+```bash
+# 1. this server
+git clone <sunrise-mcp> && cd sunrise-mcp && npm install && npm run build
+
+# 2. put the fork's capability into your own Sunrise checkout -- 45 files it adds,
+#    34 of upstream's it changes, applied as one squashed change. Nothing is committed.
+node scripts/overlay-apply.mjs --repo <your Sunrise checkout>
+
+# 3. build the DLL and drop it next to destiny2.exe
+msbuild Sunrise.sln /m /v:normal /p:Configuration=Release /p:Platform=x64
+#    -> build/x64/Release/steam_api64.dll
+
+# 4. turn the listener on. It ships OFF, and this is the step everyone misses:
+#    <game dir>\bin\x64\Sunrise\settings.json  ->  server > console_endpoint > "enabled": true
+
+# 5. tell this server where the game is
+export SUNRISE_GAME_DIR='E:\Your\Destiny_Sunrise'
+
+# 6. check before believing anything
+node -e "import('./dist/install.js').then(m=>m.inspectInstall()).then(r=>console.log(r.verdict, r.message))"
+```
+
+Step 6 is the one to run whenever something looks broken; as an MCP tool it is `install_check`. It
+answers `ok`, or names which of five things is wrong — and none of its answers is about the game.
+
+**Step 2 needs access to the fork**, which is private. There is no way around that: the console
+endpoint, `mem.*`, `character.*` and forced-key input are that fork's additions to
+`steam_api64.dll`, and upstream Sunrise has none of them. Against a stock install every tool here
+fails identically, with a refused connection.
+
+## What it needs
+
+- **Node ≥ 20**, and the server must run on **whatever machine can reach the game's loopback
+  socket** — Destiny 2 being Windows-only, that means Windows. Not a preference: the endpoint *is*
   a `127.0.0.1`-bound TCP listener inside the game process. Point your MCP client at a Windows
   `node.exe`.
-- **If you develop under WSL:** `npm install`, `npm run build`, and `npm run typecheck` are
-  ordinary TypeScript and work fine there. But *running* the server — anything that actually talks
-  to the game — needs Windows node. WSL runs NAT'd on this kind of setup, so a WSL process's
-  `127.0.0.1` is the WSL VM's own loopback, not the Windows host's; it can never reach the
-  endpoint. See `NOTES.md` for what that looks like when you get it wrong (connection refused, or
-  a silent hang against the wrong loopback).
+- **If you develop under WSL:** `npm install`, `npm run build` and `npm run typecheck` are ordinary
+  TypeScript and work fine there. *Running* the server does not. WSL is NAT'd on this kind of
+  setup, so a WSL process's `127.0.0.1` is the WSL VM's own loopback, never the Windows host's. See
+  `NOTES.md` for what getting this wrong looks like (a refused connection, or a silent hang against
+  the wrong loopback).
+- Strict TypeScript throughout: `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
+  no `any`, no `@ts-ignore`.
 - This repo is private. It pushes to a private `backup` remote only — never a public fork, never
   upstream, never a PR.
-
-## Install & build
-
-```
-npm install
-npm run build       # tsc -p tsconfig.json, emits dist/
-```
-
-Strict TypeScript throughout: `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
-no `any`, no `@ts-ignore`.
 
 ## Configure
 
@@ -163,7 +179,7 @@ itself — is in `NOTES.md`, not repeated here.
 
 ## Capabilities (the plugin layer)
 
-Beyond the six base tools, the server auto-registers **capabilities**: richer MCP tools built by
+Beyond the base tools, the server auto-registers **capabilities**: richer MCP tools built by
 composing the base primitives, added without touching `src/index.ts` or the game's C++ at all.
 
 A capability is one file, `src/capabilities/<name>.ts`, exporting a `Capability` object —
