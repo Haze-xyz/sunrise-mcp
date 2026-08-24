@@ -70,8 +70,21 @@ import { inspectInstall, resolveGameDirWithSource } from './install.js';
 import { resolveForkDir } from './sync.js';
 import { buildSolution } from './build.js';
 import { deployDll } from './deploy.js';
-import { appendNote, buildResume, journalPaths, readNotes, readState, writeState } from './journal.js';
-import type { JournalWrite } from './journal.js';
+import {
+  appendCall,
+  appendNote,
+  buildResume,
+  journalPaths,
+  readNotes,
+  readState,
+  rememberLogCursor,
+  shouldAttachResume,
+  writeState,
+} from './journal.js';
+import type { JournalPaths, JournalWrite } from './journal.js';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import type { HarvestIo } from './supervisor.js';
+import { CRASH_LIMIT, CRASH_WINDOW_MS, decideSupervisorAction, harvestThenRestart, readPolicy } from './supervisor.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -386,6 +399,176 @@ async function verifyCharacterEntered(
     : { ok: false, stage: verdict.stage, message: verdict.message, character };
 }
 
+/** Tools that need the game up. The rest -- install_check, fork_build, dll_deploy, sync -- must work with it down. */
+const GAME_FACING_TOOLS = new Set([
+  'console_run',
+  'console_describe',
+  'game_enter',
+  'game_kill',
+  'log_read',
+  'wait_for',
+  'struct_read',
+]);
+
+/** Last time anything proved the game was alive. A successful game-facing call is such a proof. */
+let lastProofOfLifeMs = 0;
+/** How stale that proof may be before tasklist is spawned again. */
+const PROOF_OF_LIFE_TTL_MS = 5_000;
+let resumeAttached = false;
+
+/**
+ * Checks the game is up, and acts on it if it is not. Returns null when there was nothing to say.
+ *
+ * `blocked: true` means the call must not run: either the policy is `report`, or this is a crash
+ * loop and restarting again would just burn the night.
+ */
+async function runPreflight(paths: JournalPaths, toolName: string): Promise<Record<string, unknown> | null> {
+  if (Date.now() - lastProofOfLifeMs < PROOF_OF_LIFE_TTL_MS) return null;
+  const info = await getGameProcessInfo();
+  if (info.running) {
+    lastProofOfLifeMs = Date.now();
+    return null;
+  }
+
+  const state = await readState(paths);
+  const policy = readPolicy();
+  const now = Date.now();
+  const action = decideSupervisorAction({ gameAlive: false, now, crashes: state.crashes }, policy);
+  if (action === 'proceed') return null;
+
+  const harvestDir = path.join(paths.dir, `crash-${String(state.crashes.length + 1).padStart(3, '0')}`);
+  const includeOld = state.crashes.length === 0;
+  const meta = { at: now, tool: toolName, lastGameEnter: state.lastGameEnter, goal: state.goal, policy, action };
+
+  if (action === 'refuse') {
+    return { blocked: true, action, policy, message: 'The game is not running. SUNRISE_MCP_SUPERVISOR is "report", so nothing was restarted. Call game_enter yourself.' };
+  }
+
+  const io: HarvestIo = {
+    copyLog: async (dir) => { await mkdir(dir, { recursive: true }); await copyFile(getLogPath(), path.join(dir, 'sunrise.log')); },
+    copyOldLog: async (dir) => { await copyFile(`${getLogPath()}.old`, path.join(dir, 'sunrise.log.old')).catch(() => undefined); },
+    writeMeta: async (dir, value) => { await writeFile(path.join(dir, 'meta.json'), `${JSON.stringify(value, null, 2)}\n`, 'utf8'); },
+    restart: async () => {
+      if (action === 'harvestAndStop') return;
+      await launchGame();
+    },
+  };
+
+  let harvestError: string | null = null;
+  try {
+    await harvestThenRestart(io, { harvestDir, includeOld, meta });
+  } catch (err) {
+    harvestError = err instanceof Error ? err.message : String(err);
+  }
+
+  const crashes = [...state.crashes, { at: now, harvestDir }];
+  await writeState(paths, { ...state, crashes });
+
+  if (action === 'harvestAndStop') {
+    return {
+      blocked: true,
+      action,
+      policy,
+      crashes: crashes.length,
+      harvestDir: path.win32.normalize(harvestDir),
+      message:
+        `The game has crashed ${CRASH_LIMIT} times within ${CRASH_WINDOW_MS / 60_000} minutes. It was NOT restarted ` +
+        'again: a night spent relaunching is a night lost. The logs from each crash are in the journal. ' +
+        'Fix the cause, or call game_enter yourself to override.',
+      ...(harvestError !== null ? { harvestError } : {}),
+    };
+  }
+
+  // The restart puts the process back, not the world. Saying so is the point: an agent that thinks
+  // it still has its character somewhere will spend the next hour acting on a place it is not in.
+  const reentered = state.lastGameEnter !== null;
+  return {
+    blocked: false,
+    action,
+    policy,
+    crashes: crashes.length,
+    harvestDir: path.win32.normalize(harvestDir),
+    message:
+      'The game was not running -- it crashed or was closed. Its logs were harvested into the journal ' +
+      'BEFORE the restart, because the game overwrites the previous log at every start. The game has been ' +
+      'launched again. ' +
+      (reentered
+        ? `You were last in the world as ${JSON.stringify(state.lastGameEnter?.args)}. That entry has NOT been replayed ` +
+          'automatically; call game_enter with those arguments if you want it back. Whatever position, activity or ' +
+          'in-flight experiment you had is gone.'
+        : 'Nothing had entered the world yet, so nothing was lost beyond the process itself.'),
+    ...(harvestError !== null ? { harvestError } : {}),
+  };
+}
+
+/**
+ * Wraps a game-facing tool with the three things that make a long unattended run possible: the
+ * journal entry, the liveness preflight, and -- once per process -- the resume block.
+ *
+ * The preflight is lazy on purpose. A successful round trip to the game is already proof it is
+ * alive, so tasklist.exe is only spawned when that proof has gone stale; spawning it on every call
+ * would add about 100ms to everything for an answer we usually already have.
+ */
+function withEndurance<A extends Record<string, unknown>>(
+  name: string,
+  handler: (args: A) => Promise<CallToolResult>,
+): (args: A) => Promise<CallToolResult> {
+  return async (args: A): Promise<CallToolResult> => {
+    const paths = journalPaths();
+    const startedAt = Date.now();
+    let supervisorReport: Record<string, unknown> | null = null;
+
+    if (GAME_FACING_TOOLS.has(name)) {
+      supervisorReport = await runPreflight(paths, name);
+      if (supervisorReport !== null && supervisorReport.blocked === true) {
+        await appendCall(paths, { ts: startedAt, tool: name, args, status: 'blocked', ms: Date.now() - startedAt });
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ stage: 'supervisor', status: 'failed', supervisor: supervisorReport }, null, 2) }],
+          isError: true,
+        };
+      }
+    }
+
+    const result = await handler(args);
+    if (result.isError !== true) lastProofOfLifeMs = Date.now();
+
+    await appendCall(paths, {
+      ts: startedAt,
+      tool: name,
+      args,
+      status: result.isError === true ? 'failed' : 'ok',
+      ms: Date.now() - startedAt,
+    });
+
+    const extras: Record<string, unknown> = {};
+    if (supervisorReport !== null) extras.supervisor = supervisorReport;
+    // Guarded on resumeAttached FIRST: once the resume has ridden out, this flag can never flip
+    // back, so reading state.json again on every later call of the night would buy nothing.
+    if (!resumeAttached && GAME_FACING_TOOLS.has(name)) {
+      const state = await readState(paths);
+      const hasHistory = state.goal !== null || state.lastGameEnter !== null || state.crashes.length > 0;
+      if (shouldAttachResume(resumeAttached, hasHistory)) {
+        resumeAttached = true;
+        extras.resume = {
+          ...buildResume(state, await readNotes(paths, 200), Date.now()),
+          // Only the automatic path says this. buildResume also serves journal_resume, where the
+          // agent asked on purpose -- telling it that it did not would simply be false, and this
+          // block is data an agent acts on, not documentation.
+          why:
+            'Attached automatically to the first game-facing call of this session, because a journal ' +
+            'exists on disk. You did not ask for it. Call journal_resume any time to see it again.',
+        };
+      }
+    }
+    if (Object.keys(extras).length === 0) return result;
+
+    return {
+      ...result,
+      content: [...result.content, { type: 'text', text: JSON.stringify(extras, null, 2) }],
+    };
+  };
+}
+
 const server = new McpServer({ name: 'sunrise-mcp', version: '0.1.0' });
 
 server.registerTool(
@@ -433,14 +616,14 @@ server.registerTool(
       line: z.string().min(1).describe('A console line, e.g. "movement.fly_speed 55" or "movement.fly_speed".'),
     },
   },
-  async ({ line }): Promise<CallToolResult> => {
+  withEndurance('console_run', async ({ line }): Promise<CallToolResult> => {
     try {
       const response: RunResponse = await endpoint.runLine(line);
       return textResult(response);
     } catch (err) {
       return errorResult(err);
     }
-  },
+  }),
 );
 
 server.registerTool(
@@ -453,14 +636,14 @@ server.registerTool(
       'not publish the arguments a command declares, only its help text, so this says which commands exist and ' +
       'not what each one takes. Where an argument matters, console_run\'s own description carries the syntax.',
   },
-  async (): Promise<CallToolResult> => {
+  withEndurance('console_describe', async (): Promise<CallToolResult> => {
     try {
       const response: DescribeResponse = await endpoint.describe();
       return textResult(response);
     } catch (err) {
       return errorResult(err);
     }
-  },
+  }),
 );
 
 server.registerTool(
@@ -490,11 +673,11 @@ server.registerTool(
       'one means the kill was accepted but the process has not finished exiting, so call it again rather than ' +
       'treating the game as gone.',
   },
-  async (): Promise<CallToolResult> => {
+  withEndurance('game_kill', async (): Promise<CallToolResult> => {
     expectDisconnectBriefly();
     const result = await killGame();
     return result.status === 'failed' ? errorResult(new Error(result.message)) : textResult(result);
-  },
+  }),
 );
 
 /**
@@ -564,7 +747,7 @@ server.registerTool(
         .describe(`digest only: an event seen at most this many times is quoted (default ${DEFAULT_RARE_THRESHOLD}).`),
     },
   },
-  async ({ lines, since, filter, mode, rareThreshold }): Promise<CallToolResult> => {
+  withEndurance('log_read', async ({ lines, since, filter, mode, rareThreshold }): Promise<CallToolResult> => {
     try {
       // No cursor, no filter, no mode is the old call, and it keeps its old answer: a tail.
       if (since === undefined && filter === undefined && mode === undefined) {
@@ -609,17 +792,19 @@ server.registerTool(
       if (mode === 'digest') {
         const digest = buildDigest(window.records, rareThreshold);
         const verbatimOmitted = Math.max(0, digest.verbatim.length - DIGEST_VERBATIM_LIMIT);
+        await rememberLogCursor(journalPaths(), window.cursor);
         return textResult({
           ...shared,
           digest: { ...digest, verbatim: digest.verbatim.slice(0, DIGEST_VERBATIM_LIMIT) },
           ...(verbatimOmitted > 0 ? { verbatimOmitted } : {}),
         });
       }
+      await rememberLogCursor(journalPaths(), window.cursor);
       return textResult({ ...shared, lines: window.records.map((record) => record.raw) });
     } catch (err) {
       return errorResult(err);
     }
-  },
+  }),
 );
 
 server.registerTool(
@@ -654,7 +839,7 @@ server.registerTool(
       since: z.string().optional().describe('A cursor from a previous call; start watching from there.'),
     },
   },
-  async ({ ev, level, channel, text, count, timeoutMs, since }): Promise<CallToolResult> => {
+  withEndurance('wait_for', async ({ ev, level, channel, text, count, timeoutMs, since }): Promise<CallToolResult> => {
     try {
       const filter = {
         ...(ev !== undefined ? { ev } : {}),
@@ -695,11 +880,12 @@ server.registerTool(
           ...(since !== undefined ? { since } : {}),
         },
       );
+      if (result.cursor.length > 0) await rememberLogCursor(journalPaths(), result.cursor);
       return textResult(result);
     } catch (err) {
       return errorResult(err);
     }
-  },
+  }),
 );
 
 server.registerTool(
@@ -778,7 +964,7 @@ server.registerTool(
   },
   // Serialized end to end: two overlapping calls would both observe "not pressed yet" before
   // either wrote the press record, and both would fire SendInput. See serialize.ts.
-  async ({ character }): Promise<CallToolResult> => serializeGameEnter(async (): Promise<CallToolResult> => {
+  withEndurance('game_enter', async ({ character }): Promise<CallToolResult> => serializeGameEnter(async (): Promise<CallToolResult> => {
     // Which stage failed is the whole point of this tool's error reporting (see its description),
     // so every failure -- expected (a stage's own bad outcome) or not (an exception thrown while
     // in it) -- goes through this one path, tagged with whichever stage was running at the time.
@@ -1113,6 +1299,12 @@ server.registerTool(
             ...settingsReport(),
           });
         }
+        const paths = journalPaths();
+        const state = await readState(paths);
+        await writeState(paths, {
+          ...state,
+          lastGameEnter: { args: character !== undefined ? { character } : {}, at: Date.now() },
+        });
         return textResult({
           status: 'ok',
           route: pressRoute,
@@ -1123,6 +1315,12 @@ server.registerTool(
         });
       }
 
+      const paths = journalPaths();
+      const state = await readState(paths);
+      await writeState(paths, {
+        ...state,
+        lastGameEnter: { args: character !== undefined ? { character } : {}, at: Date.now() },
+      });
       return textResult({
         status: 'ok',
         route: pressRoute,
@@ -1133,7 +1331,7 @@ server.registerTool(
       const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       return fail(stage, message, settingsReport());
     }
-  }),
+  })),
 );
 
 // Enfichable capabilities: each console-composed tool registers itself here, so adding one is a
@@ -1223,10 +1421,11 @@ server.registerTool(
   {
     description:
       'Writes one line into the journal on disk, so it survives this session dying. Use it for what ' +
-      'you learned, not for what you did. Over a long run this is the only thing that makes the next ' +
-      'session cheaper than this one: kind:"goal" once at the start, kind:"finding" when something is ' +
-      'established, kind:"dead-end" when a line of attack is ruled out, so nobody spends an hour ' +
-      're-ruling it out.',
+      'you learned, not for what you did -- every game-facing tool call (console_run, console_describe, ' +
+      'game_enter, game_kill, log_read, wait_for, struct_read) is already recorded automatically. Over a ' +
+      'long run this is the only thing that makes the next session cheaper than this one: kind:"goal" ' +
+      'once at the start, kind:"finding" when something is established, kind:"dead-end" when a line of ' +
+      'attack is ruled out, so nobody spends an hour re-ruling it out.',
     inputSchema: {
       text: z.string().min(1).describe('What was learned. One sentence is better than a paragraph.'),
       kind: z
@@ -1261,9 +1460,9 @@ server.registerTool(
   {
     description:
       'Returns what previous sessions left behind: the goal, the most recent findings, how many times ' +
-      'the game crashed, the last character entered, and the log cursor to carry on from. Call it once ' +
-      'at the start of a session to pick up where a previous one left off, and again any time you want ' +
-      'to see the latest.',
+      'the game crashed, the last character entered, and the log cursor to carry on from. This is ' +
+      'attached automatically to the first game-facing call of a session, so you usually do not need to ' +
+      'ask -- ask when you want to see it again.',
     inputSchema: {},
   },
   async (): Promise<CallToolResult> => {
@@ -1274,7 +1473,7 @@ server.registerTool(
   },
 );
 
-registerCapabilities(server, buildContext(endpoint), CAPABILITIES);
+registerCapabilities(server, buildContext(endpoint), CAPABILITIES, withEndurance);
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();

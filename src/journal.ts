@@ -197,6 +197,17 @@ export async function rememberLogCursor(paths: JournalPaths, cursor: string): Pr
   return writeState(paths, { ...state, logCursor: cursor });
 }
 
+/**
+ * Whether this call should carry the resume block.
+ *
+ * You cannot make a foreign agent call journal_resume -- it does not know the tool exists. So the
+ * history is attached to whatever it does call first, once per process, and only when there is a
+ * history to attach.
+ */
+export function shouldAttachResume(alreadyAttached: boolean, hasHistory: boolean): boolean {
+  return !alreadyAttached && hasHistory;
+}
+
 export interface ResumeBlock {
   goal: string | null;
   recentNotes: Note[];

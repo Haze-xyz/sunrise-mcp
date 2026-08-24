@@ -17,7 +17,7 @@ const caps = [{
   run: async (args, ctx) => { ranWith = { args, ctx }; return { content: [{ type: 'text', text: 'ok' }] }; },
 }];
 
-registerCapabilities(fakeServer, fakeCtx, caps);
+registerCapabilities(fakeServer, fakeCtx, caps, (_, handler) => handler);
 assert.equal(registered.length, 1);
 assert.equal(registered[0].name, 'probe');
 await registered[0].handler({ a: 1 });

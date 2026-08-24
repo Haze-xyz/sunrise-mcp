@@ -47,7 +47,14 @@ export function decideSupervisorAction(
   if (observation.gameAlive) return 'proceed';
   if (policy === 'report') return 'refuse';
 
-  const recent = observation.crashes.filter((crash) => observation.now - crash.at <= CRASH_WINDOW_MS);
+  // elapsed >= 0 guards against a crash timestamped in the future: one backward clock step (an NTP
+  // correction, a resumed VM) is enough to produce one, and a negative elapsed satisfies
+  // `<= CRASH_WINDOW_MS` on its own -- without this guard such a crash would count as recent until
+  // the clock caught up, and two of them would wedge the supervisor into harvestAndStop for good.
+  const recent = observation.crashes.filter((crash) => {
+    const elapsed = observation.now - crash.at;
+    return elapsed >= 0 && elapsed <= CRASH_WINDOW_MS;
+  });
   // The crash about to be recorded is the one we are handling, so it counts.
   return recent.length + 1 >= CRASH_LIMIT ? 'harvestAndStop' : 'harvestAndRestart';
 }

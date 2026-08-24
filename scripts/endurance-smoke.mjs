@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseLogLine } from '../dist/log-parse.js';
 import { DEFAULT_WAIT_TIMEOUT_MS, waitFor } from '../dist/wait-for.js';
-import { appendCall, appendNote, buildResume, readNotes, readState, writeState } from '../dist/journal.js';
+import { appendCall, appendNote, buildResume, readNotes, readState, shouldAttachResume, writeState } from '../dist/journal.js';
 import { CRASH_LIMIT, CRASH_WINDOW_MS, decideSupervisorAction, harvestThenRestart } from '../dist/supervisor.js';
 
 const results = [];
@@ -356,6 +356,27 @@ async function main() {
     const old = [{ at: 0, harvestDir: 'x' }, { at: 1_000, harvestDir: 'x' }];
     const now = CRASH_WINDOW_MS + 5_000;
     assert.equal(decideSupervisorAction({ gameAlive: false, now, crashes: old }, 'restart'), 'harvestAndRestart');
+  });
+
+  await test('a crash timestamped in the future does not wedge the supervisor', () => {
+    // One backward clock step -- an NTP correction, a resumed VM -- is enough to record a crash in
+    // the future. A negative elapsed satisfies `<= CRASH_WINDOW_MS`, so without a lower bound those
+    // crashes count as recent until the clock catches up, two of them reach the limit, and the
+    // supervisor answers harvestAndStop for the rest of the night without ever saying why.
+    const future = [
+      { at: 1_005_000, harvestDir: 'crash-001' },
+      { at: 1_006_000, harvestDir: 'crash-002' },
+    ];
+    assert.equal(
+      decideSupervisorAction({ gameAlive: false, now: 1_000_000, crashes: future }, 'restart'),
+      'harvestAndRestart',
+    );
+  });
+
+  await test('the resume rides on the first call, once, and only when there is history', () => {
+    assert.equal(shouldAttachResume(false, true), true);
+    assert.equal(shouldAttachResume(true, true), false, 'never twice in one process');
+    assert.equal(shouldAttachResume(false, false), false, 'a first-ever run gets no empty resume');
   });
 
   await test('EVERY harvest step happens before the restart', async () => {
