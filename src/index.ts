@@ -591,7 +591,12 @@ function withEndurance<A extends Record<string, unknown>>(
     }
 
     const result = await handler(args);
-    if (result.isError !== true) lastProofOfLifeMs = Date.now();
+    // game_kill succeeding proves the OPPOSITE of liveness -- killGame even waits for the process to
+    // leave the process table before saying so. Refreshing the proof here would let the next call
+    // inside the TTL skip the preflight entirely and meet a raw connection error instead of the
+    // supervisor, and "game_kill, then a game-facing call" is a sequence this server's own failure
+    // messages recommend. Found only by driving the real game: no fixture reaches it.
+    if (result.isError !== true) lastProofOfLifeMs = name === 'game_kill' ? 0 : Date.now();
 
     await appendCall(paths, {
       ts: startedAt,
