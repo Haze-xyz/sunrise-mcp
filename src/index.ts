@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Sunrise MCP server: ten base tools plus the self-registering capability plugins, over stdio,
+ * Sunrise MCP server: the base tools registered below plus the self-registering capability plugins, over stdio,
  * backed by the console endpoint client (endpoint.ts),
  * the Windows game/log helpers (game.ts), the title-screen key-press helpers (keys.ts), game_enter's
  * pure branch-selection logic (game-enter-decision.ts), destiny2.exe process lookup (tasklist.ts),
@@ -405,7 +405,7 @@ async function verifyCharacterEntered(
 
 /**
  * Tools recorded in the journal (one call entry, every time) and eligible for the automatic resume
- * block on this process's first call. The rest -- install_check, fork_build, dll_deploy, sync_*,
+ * block on this process's first call. The rest -- install_check, fork_build, dll_deploy,
  * journal_note, journal_resume -- must work with the game down, by design, so they sit outside both
  * this set and PREFLIGHT_TOOLS below.
  */
@@ -1029,7 +1029,10 @@ server.registerTool(
       'calls rather than one long one. "gameDied" means the game is gone and no amount of waiting will ' +
       'change that. "rotated" means the game restarted and opened a fresh log: this call already scanned ' +
       'that new log from its top and nothing in it matched, so the cursor handed back is where that ' +
-      'scan stopped -- call again with it to keep watching the new log.',
+      'scan stopped -- call again with it to keep watching the new log. "cursorInvalid" means the ' +
+      '`since` passed in could not be read, so this call fell back to scanning from the top of the ' +
+      'current file instead of resuming from it -- pass the fresh cursor this call hands back, not the ' +
+      'one that failed.',
     inputSchema: {
       ev: z.array(z.string()).optional().describe('Wait for one of these event names, e.g. ["world_loaded"].'),
       level: z.enum(['error', 'warn', 'info', 'debug']).optional().describe('Severity threshold to match.'),

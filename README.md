@@ -150,8 +150,10 @@ need to wait for a load after launching before calling `console_run` or `console
 
 ## The tools
 
-Ten tools. `console_run` and `console_describe` talk to the console endpoint directly; the rest
-work through the game process, its log, its settings file, or the on-disk journal:
+The base tools, registered in `src/index.ts` (`struct_read` and any other capability live below,
+under [Capabilities](#capabilities-the-plugin-layer)). `console_run` and `console_describe` talk to
+the console endpoint directly; the rest work through the game process, its log, its settings file,
+its build, or the on-disk journal:
 
 | Tool | Input | Output |
 |---|---|---|
@@ -160,9 +162,11 @@ work through the game process, its log, its settings file, or the on-disk journa
 | `install_check` | — | What this install actually is, before believing any other tool's failure: `ok`, `gameDirNotFound`, `settingsMissing`, `settingsUnreadable`, `notForkBuild`, or `endpointDisabled`. Touches nothing. |
 | `game_launch` | — | Starts `destiny2.exe` (killing any existing instance first) and waits for its window. |
 | `game_kill` | — | `taskkill /IM destiny2.exe /F`, then waits for the process to actually leave the process table. Safe to call when the game isn't running. |
-| `log_read` | `lines?: number` | The tail of `sunrise.log` (default 200 lines, capped at 1000). |
+| `log_read` | `lines?: number`, `since?: string`, `filter?: {ev?, level?, channel?, text?}`, `mode?: 'lines' \| 'digest'`, `rareThreshold?: number` | With none of the new arguments, the tail of `sunrise.log` (default 200 lines, capped at 1000), unchanged. `since` (a previous call's `cursor`) reads only what's new and reports `rotated` across a restart. `filter` keeps only matching lines. `mode: "digest"` returns counts instead of lines, with rare events — and every warn/error — quoted verbatim. |
 | `game_enter` | `character?: string` | Launches if needed, gets past the title screen, and waits for the world to load. With a character named, enters the world as that character and reports which one actually got in; without one, leaves the game at character selection. |
 | `wait_for` | `ev?`, `level?`, `channel?`, `text?`, `count?`, `timeoutMs?`, `since?` | Blocks until a matching log line appears, then returns it plus a digest of everything else read while waiting. Use instead of polling `log_read`. |
+| `fork_build` | `repo?: string` | Compiles the Sunrise fork (Release x64) and reports whether it built, without touching the running game. |
+| `dll_deploy` | `repo?: string` | Copies the fork's freshly built `steam_api64.dll` into the install's `bin\x64`. Refuses while `destiny2.exe` is running. |
 | `journal_note` | `text: string`, `kind?` | Writes one line to the on-disk journal, so it survives this session dying. |
 | `journal_resume` | — | What previous sessions left behind: goal, findings, crashes, last character, log cursor. |
 
