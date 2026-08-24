@@ -625,13 +625,16 @@ server.registerTool(
   {
     description:
       'Blocks until a matching line appears in sunrise.log, then returns it -- plus a digest of ' +
-      'everything else that happened while waiting, so the wait costs one small answer instead of ' +
-      'thousands of lines. Use it instead of polling log_read in a loop. It ends early, in about a ' +
-      'second, if the game dies: a wait that can no longer be satisfied is not worth its deadline. ' +
-      `The default timeout is ${DEFAULT_WAIT_TIMEOUT_MS}ms because the MCP client -- not this server -- ` +
-      'owns the request deadline, and 60s is the SDK default. A timeout is NOT a failure: it returns ' +
-      'matched:false with a cursor, and calling again with that cursor resumes exactly where this call ' +
-      'stopped. To wait five minutes, make six calls, not one long one.',
+      'everything read while waiting, the matching line included, so the wait costs one small answer ' +
+      'instead of thousands of lines. Use it instead of polling log_read in a loop. It ends early, in ' +
+      'about a second, if the game dies: a wait that can no longer be satisfied is not worth its ' +
+      `deadline. The default timeout is ${DEFAULT_WAIT_TIMEOUT_MS}ms because the MCP client -- not this ` +
+      'server -- owns the request deadline, and 60s is the SDK default. Not matching is NOT an error: ' +
+      'it returns matched:false with a named reason and a cursor. "timeout" means keep going -- call ' +
+      'again with that cursor and you resume exactly where this call stopped, so five minutes is six ' +
+      'calls rather than one long one. "gameDied" means the game is gone and no amount of waiting will ' +
+      'change that. "rotated" means the game restarted and opened a fresh log; the cursor handed back ' +
+      'starts at the top of the new one.',
     inputSchema: {
       ev: z.array(z.string()).optional().describe('Wait for one of these event names, e.g. ["world_loaded"].'),
       level: z.enum(['error', 'warn', 'info', 'debug']).optional().describe('Severity threshold to match.'),
