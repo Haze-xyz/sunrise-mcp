@@ -57,6 +57,7 @@ import {
 import { decideGameEnterAction } from './game-enter-decision.js';
 import { buildDigest, DEFAULT_RARE_THRESHOLD } from './log-parse.js';
 import { readWindow, MAX_OUTPUT_LINES } from './log-stream.js';
+import { DEFAULT_POLL_MS, DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS, waitFor } from './wait-for.js';
 import { getGameProcessInfo } from './tasklist.js';
 import { clearPressRecord, resolvePressedThisSession, writePressRecord, type PressRecord } from './press-record.js';
 import { createSerializer } from './serialize.js';
@@ -613,6 +614,82 @@ server.registerTool(
         });
       }
       return textResult({ ...shared, lines: window.records.map((record) => record.raw) });
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  'wait_for',
+  {
+    description:
+      'Blocks until a matching line appears in sunrise.log, then returns it -- plus a digest of ' +
+      'everything else that happened while waiting, so the wait costs one small answer instead of ' +
+      'thousands of lines. Use it instead of polling log_read in a loop. It ends early, in about a ' +
+      'second, if the game dies: a wait that can no longer be satisfied is not worth its deadline. ' +
+      `The default timeout is ${DEFAULT_WAIT_TIMEOUT_MS}ms because the MCP client -- not this server -- ` +
+      'owns the request deadline, and 60s is the SDK default. A timeout is NOT a failure: it returns ' +
+      'matched:false with a cursor, and calling again with that cursor resumes exactly where this call ' +
+      'stopped. To wait five minutes, make six calls, not one long one.',
+    inputSchema: {
+      ev: z.array(z.string()).optional().describe('Wait for one of these event names, e.g. ["world_loaded"].'),
+      level: z.enum(['error', 'warn', 'info', 'debug']).optional().describe('Severity threshold to match.'),
+      channel: z.array(z.string()).optional().describe('Channels to match.'),
+      text: z.string().optional().describe('Case-insensitive substring to match anywhere in the line.'),
+      count: z.number().int().positive().optional().describe('Return on the nth match rather than the first.'),
+      timeoutMs: z
+        .number()
+        .int()
+        .positive()
+        .max(MAX_WAIT_TIMEOUT_MS)
+        .optional()
+        .describe(`How long to wait (default ${DEFAULT_WAIT_TIMEOUT_MS}, max ${MAX_WAIT_TIMEOUT_MS}).`),
+      since: z.string().optional().describe('A cursor from a previous call; start watching from there.'),
+    },
+  },
+  async ({ ev, level, channel, text, count, timeoutMs, since }): Promise<CallToolResult> => {
+    try {
+      const filter = {
+        ...(ev !== undefined ? { ev } : {}),
+        ...(level !== undefined ? { level } : {}),
+        ...(channel !== undefined ? { channel } : {}),
+        ...(text !== undefined ? { text } : {}),
+      };
+      if (Object.keys(filter).length === 0) {
+        return errorResult(new Error('wait_for needs something to wait for: pass at least one of ev, level, channel or text.'));
+      }
+      const result = await waitFor(
+        {
+          readWindow: async (cursor) => {
+            const window = await readWindow(getLogPath(), { ...(cursor !== undefined ? { since: cursor } : {}) });
+            return { records: window.records, cursor: window.cursor, state: window.state };
+          },
+          isGameAlive: async () => (await getGameProcessInfo()).running,
+          now: () => Date.now(),
+          sleep: (ms) => sleep(ms),
+          // Only helps clients that set resetTimeoutOnProgress, which defaults to false and is the
+          // client's call, not ours -- but it costs nothing and it helps those that did.
+          onProgress: (waitedMs) => {
+            // Best effort only: a client that never asked for progress may reject or ignore this,
+            // and a rejected notification must not take down a wait that is working.
+            server.server
+              .notification({
+                method: 'notifications/progress',
+                params: { progressToken: 'wait_for', progress: waitedMs, total: timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS },
+              })
+              .catch(() => undefined);
+          },
+        },
+        {
+          filter,
+          ...(count !== undefined ? { count } : {}),
+          timeoutMs: timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS,
+          pollMs: DEFAULT_POLL_MS,
+          ...(since !== undefined ? { since } : {}),
+        },
+      );
+      return textResult(result);
     } catch (err) {
       return errorResult(err);
     }

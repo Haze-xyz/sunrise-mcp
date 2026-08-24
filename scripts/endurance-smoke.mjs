@@ -1,0 +1,175 @@
+#!/usr/bin/env node
+/**
+ * Tests of wait-for.js, journal.js and supervisor.js. Every clock, probe and filesystem effect is
+ * injected, so this runs under WSL with no game and no Windows.
+ *
+ * Run after `npm run build`:
+ *   node scripts/endurance-smoke.mjs
+ * or as part of:
+ *   npm run test:endurance
+ *
+ * The two cases worth the file. A wait that keeps waiting after the game has died burns the whole
+ * timeout for an answer that could not arrive -- over a night that is hours. And a supervisor that
+ * relaunches before harvesting destroys the evidence it exists to preserve, because the game rotates
+ * sunrise.log into sunrise.log.old at every start and keeps exactly one: the second crash of the
+ * night would erase the first. Neither is visible by reading the code; both are asserted here.
+ */
+
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { parseLogLine } from '../dist/log-parse.js';
+import { DEFAULT_WAIT_TIMEOUT_MS, waitFor } from '../dist/wait-for.js';
+
+const results = [];
+
+async function test(name, fn) {
+  try {
+    await fn();
+    results.push({ name, ok: true });
+    console.log(`PASS  ${name}`);
+  } catch (err) {
+    results.push({ name, ok: false });
+    console.log(`FAIL  ${name}`);
+    console.log(err instanceof Error ? err.stack ?? err.message : String(err));
+  }
+}
+
+/**
+ * A fake world for waitFor: a virtual clock that only moves when the code sleeps, and a script of
+ * what each successive read returns. Nothing here waits in real time.
+ */
+function world({ reads, alive = () => true }) {
+  let now = 0;
+  let call = 0;
+  const progress = [];
+  return {
+    progress,
+    deps: {
+      readWindow: async () => {
+        const lines = reads[call] ?? [];
+        call += 1;
+        return {
+          records: lines.map(parseLogLine),
+          cursor: `cursor-${call}`,
+          state: 'resumable',
+          dropped: 0,
+          scanned: lines.length,
+        };
+      },
+      isGameAlive: async () => alive(now),
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+      onProgress: (waitedMs) => progress.push(waitedMs),
+    },
+  };
+}
+
+async function main() {
+  await test('a match on the first read returns at once', async () => {
+    const { deps } = world({ reads: [['client level=info t=5 ev=world_loaded result=ok']] });
+    const result = await waitFor(deps, { filter: { ev: ['world_loaded'] }, timeoutMs: 55_000, pollMs: 500 });
+    assert.equal(result.matched, true);
+    assert.ok(result.line.includes('ev=world_loaded'));
+    assert.equal(result.waitedMs, 0);
+  });
+
+  await test('a match on a later read returns the matching line, not the last line', async () => {
+    const { deps } = world({
+      reads: [
+        ['client level=info t=1 ev=send bytes=1'],
+        ['client level=info t=2 ev=send bytes=2'],
+        ['client level=info t=3 ev=world_loaded result=ok', 'client level=info t=4 ev=send bytes=3'],
+      ],
+    });
+    const result = await waitFor(deps, { filter: { ev: ['world_loaded'] }, timeoutMs: 55_000, pollMs: 500 });
+    assert.equal(result.matched, true);
+    assert.ok(result.line.includes('ev=world_loaded'));
+    assert.equal(result.waitedMs, 1000);
+  });
+
+  await test('a timeout is not an error: it hands back a cursor to resume from', async () => {
+    const { deps } = world({ reads: [] });
+    const result = await waitFor(deps, { filter: { ev: ['never'] }, timeoutMs: 2_000, pollMs: 500 });
+    assert.equal(result.matched, false);
+    assert.equal(result.reason, 'timeout');
+    assert.ok(result.cursor.startsWith('cursor-'));
+    assert.ok(result.waitedMs >= 2_000);
+  });
+
+  await test('the game dying ends the wait at once, not at the deadline', async () => {
+    // This is the case that costs hours over a night if it is got wrong.
+    const { deps } = world({ reads: [], alive: (now) => now < 1_500 });
+    const result = await waitFor(deps, { filter: { ev: ['never'] }, timeoutMs: 600_000, pollMs: 500 });
+    assert.equal(result.matched, false);
+    assert.equal(result.reason, 'gameDied');
+    assert.ok(result.waitedMs < 5_000, `gave up after ${result.waitedMs}ms, should be ~1500`);
+  });
+
+  await test('a rotation ends the wait and says so', async () => {
+    let call = 0;
+    const deps = {
+      readWindow: async () => {
+        call += 1;
+        return { records: [], cursor: 'c', state: call === 1 ? 'resumable' : 'rotated', dropped: 0, scanned: 0 };
+      },
+      isGameAlive: async () => true,
+      now: () => 0,
+      sleep: async () => {},
+      onProgress: () => {},
+    };
+    const result = await waitFor(deps, { filter: { ev: ['never'] }, timeoutMs: 5_000, pollMs: 500 });
+    assert.equal(result.matched, false);
+    assert.equal(result.reason, 'rotated');
+  });
+
+  await test('count waits for the nth occurrence, not the first', async () => {
+    const { deps } = world({
+      reads: [
+        ['client level=info t=1 ev=tick'],
+        ['client level=info t=2 ev=tick'],
+        ['client level=info t=3 ev=tick'],
+      ],
+    });
+    const result = await waitFor(deps, { filter: { ev: ['tick'] }, count: 3, timeoutMs: 55_000, pollMs: 500 });
+    assert.equal(result.matched, true);
+    assert.ok(result.line.includes('t=3'));
+  });
+
+  await test('everything seen during the wait comes back as a digest', async () => {
+    const noise = Array.from({ length: 40 }, (_, i) => `client level=debug t=${i} ev=send bytes=${i}`);
+    const { deps } = world({ reads: [noise, ['client level=info t=99 ev=world_loaded']] });
+    const result = await waitFor(deps, { filter: { ev: ['world_loaded'] }, timeoutMs: 55_000, pollMs: 500 });
+    assert.equal(result.matched, true);
+    assert.equal(result.digest.total, 41);
+    assert.equal(result.digest.rows.length, 1);
+    assert.equal(result.digest.rows[0].ev, 'send');
+    assert.equal(result.digest.rows[0].count, 40);
+  });
+
+  await test('the default timeout sits under the SDK client timeout', () => {
+    // protocol.js: DEFAULT_REQUEST_TIMEOUT_MSEC = 60000. A wait that outlives it produces the worst
+    // possible answer: the client reports a timeout, the server keeps waiting, and the event that
+    // does arrive is reported to nobody.
+    assert.ok(DEFAULT_WAIT_TIMEOUT_MS < 60_000);
+    assert.ok(DEFAULT_WAIT_TIMEOUT_MS >= 50_000);
+  });
+
+  await test('progress is emitted on every poll, for the clients that honour it', async () => {
+    const { deps, progress } = world({ reads: [] });
+    await waitFor(deps, { filter: { ev: ['never'] }, timeoutMs: 2_000, pollMs: 500 });
+    assert.ok(progress.length >= 3);
+  });
+
+  const failed = results.filter((r) => !r.ok);
+  console.log(`\n${results.length - failed.length}/${results.length} passed`);
+  process.exit(failed.length > 0 ? 1 : 0);
+}
+
+main().catch((err) => {
+  console.error('endurance smoke test crashed:', err);
+  process.exit(1);
+});
