@@ -525,23 +525,34 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
   // The restart puts the process back, not the world. Saying so is the point: an agent that thinks
   // it still has its character somewhere will spend the next hour acting on a place it is not in.
   const reentered = state.lastGameEnter !== null;
+
+  // Three outcomes, not two. Conflating any pair of them puts a false sentence on the wire, and the
+  // third one is not exotic: harvestThenRestart deliberately does not restart after a failed
+  // harvest, because the game overwrites its previous log at every start and relaunching before the
+  // evidence is safe would destroy the very crash worth reading. Reporting "launched again" in the
+  // same object that carries a harvestError is a response contradicting itself.
+  const outcome =
+    harvestError !== null
+      ? `Harvesting its logs FAILED (${harvestError}), so it was deliberately NOT restarted: the game ` +
+        'overwrites its previous log at every start, and relaunching before the evidence is safe would ' +
+        'destroy the very crash you would want to read. The game is still down. Fix the journal, or start ' +
+        'the game with game_launch if you would rather lose that log. '
+      : relaunch !== null && relaunch.status !== 'launched'
+        ? `Its logs were harvested into the journal, but the relaunch FAILED: ${relaunch.message} The game ` +
+          'is still down -- start it with game_launch, which this check does not gate. '
+        : 'Its logs were harvested into the journal BEFORE the restart, because the game overwrites the ' +
+          'previous log at every start. The game has been launched again. ';
   return {
     blocked: false,
     action,
     policy,
     crashes: crashCount,
     ...(firstSighting ? { harvestDir: path.win32.normalize(harvestDir) } : {}),
-    ...(relaunch !== null ? { relaunch: relaunch.status } : {}),
+    relaunch: relaunch?.status ?? 'notAttempted',
     ...(journalWrite !== null && journalWrite.status !== 'ok' ? { journalWrite } : {}),
     message:
-      'The game was not running -- it crashed or was closed. Its logs were harvested into the journal ' +
-      'BEFORE the restart, because the game overwrites the previous log at every start. ' +
-      // launchGame resolves rather than rejecting on failure, so this has to be read, not assumed:
-      // announcing a relaunch that did not happen is the same defect as pointing at a gated tool.
-      (relaunch === null || relaunch.status === 'launched'
-        ? 'The game has been launched again. '
-        : `The relaunch FAILED: ${relaunch.message} The game is still down -- start it with game_launch, ` +
-          'which this check does not gate. ') +
+      'The game was not running -- it crashed or was closed. ' +
+      outcome +
       (reentered
         ? `You were last in the world as ${JSON.stringify(state.lastGameEnter?.args)}. That entry has NOT been replayed ` +
           'automatically; call game_enter with those arguments if you want it back. Whatever position, activity or ' +
