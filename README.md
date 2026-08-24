@@ -161,6 +161,9 @@ Six base tools, all over the console endpoint:
 | `game_kill` | — | `taskkill /IM destiny2.exe /F`, then waits for the process to actually leave the process table. Safe to call when the game isn't running. |
 | `log_read` | `lines?: number` | The tail of `sunrise.log` (default 200 lines, capped at 1000). |
 | `game_enter` | `character?: string` | Launches if needed, gets past the title screen, and waits for the world to load. With a character named, enters the world as that character and reports which one actually got in; without one, leaves the game at character selection. |
+| `wait_for` | Blocks until a matching log line appears, then returns it plus a digest of everything else. Use instead of polling `log_read`. |
+| `journal_note` | Writes one finding to the on-disk journal, so it survives this session dying. |
+| `journal_resume` | Returns what previous sessions left behind: goal, findings, crashes, last character. |
 
 `console_describe` is authoritative for which console entries exist (`console.*`, `log.*`,
 `movement.*`, `player.*`, `input.*`, `mem.*`, `character.*`, `bootflow.character_step`, and more
@@ -248,3 +251,26 @@ exception: they need both a running game and Windows node, and say so in their o
 See `NOTES.md` for the deep reference — the wire protocol, the retry policy, `game_enter`'s full
 ordering and its measured failure modes, and the testing approach in more detail — and the design
 spec above for why the capability layer is shaped the way it is.
+
+## Over a long session
+
+Three things change once you are working for hours rather than minutes.
+
+**Read the log by cursor, not by tail.** Every `log_read` hands back a `cursor`; pass it as `since`
+on the next call and you get only what is new. The log runs at roughly 0.3 to 2.4 MB an hour, so a
+plain tail is the single largest consumer of an agent's context — and after the first few hours it
+can no longer reach the start of the run at all. `mode: "digest"` counts the frequent events and
+quotes only the rare ones: on a real 882-line log that is 34 lines out.
+
+**Wait, do not poll.** `wait_for { ev: ["world_loaded"] }` returns the line you were waiting for
+plus a count of everything that happened meanwhile. It gives up in about a second if the game dies,
+rather than at its deadline. Its timeout is 55s because the *client* — not this server — owns the
+request deadline and the MCP SDK's default is 60s; a timeout is not a failure, it hands back a
+cursor, so a five-minute wait is six calls.
+
+**The game restarting is handled, and reported.** If the game is found dead, its logs are harvested
+into `bin\x64\Sunrise\mcp\crash-NNN\` **before** it is relaunched — the game overwrites its
+previous log at every start, so harvesting afterwards would destroy the crash you wanted. The
+process comes back; your character does not. The reply names the `game_enter` to call if you want
+it. Three crashes in ten minutes stop the relaunching. Set `SUNRISE_MCP_SUPERVISOR=report` to be
+told instead of restarted, or `off` to disable it entirely.
