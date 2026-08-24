@@ -70,6 +70,7 @@ import { inspectInstall, resolveGameDirWithSource } from './install.js';
 import { resolveForkDir } from './sync.js';
 import { buildSolution } from './build.js';
 import { deployDll } from './deploy.js';
+import { appendNote, buildResume, journalPaths, readNotes, readState, writeState } from './journal.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -1213,6 +1214,53 @@ server.registerTool(
     const { dir: gameDir } = resolveGameDirWithSource();
     const result = await deployDll(forkDir, gameDir);
     return result.status === 'refused' ? errorResult(new Error(result.message)) : textResult(result);
+  },
+);
+
+server.registerTool(
+  'journal_note',
+  {
+    description:
+      'Writes one line into the journal on disk, so it survives this session dying. Use it for what ' +
+      'you learned, not for what you did. Over a long run this is the only thing that makes the next ' +
+      'session cheaper than this one: kind:"goal" once at the start, kind:"finding" when something is ' +
+      'established, kind:"dead-end" when a line of attack is ruled out, so nobody spends an hour ' +
+      're-ruling it out.',
+    inputSchema: {
+      text: z.string().min(1).describe('What was learned. One sentence is better than a paragraph.'),
+      kind: z
+        .enum(['finding', 'goal', 'attempt', 'dead-end'])
+        .optional()
+        .describe('Default "finding". Findings and goals lead the resume block; attempts and dead-ends follow.'),
+    },
+  },
+  async ({ text, kind }): Promise<CallToolResult> => {
+    const paths = journalPaths();
+    const note = { ts: Date.now(), kind: kind ?? ('finding' as const), text };
+    const write = await appendNote(paths, note);
+    if (kind === 'goal') {
+      const state = await readState(paths);
+      await writeState(paths, { ...state, goal: text });
+    }
+    return textResult({ journal: write, note, dir: path.win32.normalize(paths.dir) });
+  },
+);
+
+server.registerTool(
+  'journal_resume',
+  {
+    description:
+      'Returns what previous sessions left behind: the goal, the most recent findings, how many times ' +
+      'the game crashed, the last character entered, and the log cursor to carry on from. Call it once ' +
+      'at the start of a session to pick up where a previous one left off, and again any time you want ' +
+      'to see the latest.',
+    inputSchema: {},
+  },
+  async (): Promise<CallToolResult> => {
+    const paths = journalPaths();
+    const state = await readState(paths);
+    const notes = await readNotes(paths, 200);
+    return textResult(buildResume(state, notes, Date.now()));
   },
 );
 

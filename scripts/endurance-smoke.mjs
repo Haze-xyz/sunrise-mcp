@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseLogLine } from '../dist/log-parse.js';
 import { DEFAULT_WAIT_TIMEOUT_MS, waitFor } from '../dist/wait-for.js';
+import { appendCall, appendNote, buildResume, readNotes, readState, writeState } from '../dist/journal.js';
 
 const results = [];
 
@@ -186,6 +187,109 @@ async function main() {
     const { deps, progress } = world({ reads: [] });
     await waitFor(deps, { filter: { ev: ['never'] }, timeoutMs: 2_000, pollMs: 500 });
     assert.ok(progress.length >= 3);
+  });
+
+  async function tempJournal() {
+    const dir = await mkdtemp(path.join(tmpdir(), 'journal-'));
+    return {
+      paths: {
+        dir,
+        state: path.join(dir, 'state.json'),
+        calls: path.join(dir, 'calls.jsonl'),
+        notes: path.join(dir, 'notes.jsonl'),
+      },
+      cleanup: () => rm(dir, { recursive: true, force: true }),
+    };
+  }
+
+  await test('a journal that has never been written reads as empty, not as an error', async () => {
+    const { paths, cleanup } = await tempJournal();
+    const state = await readState(paths);
+    assert.equal(state.lastGameEnter, null);
+    assert.deepEqual(state.crashes, []);
+    assert.equal(state.goal, null);
+    await cleanup();
+  });
+
+  await test('state survives a round trip', async () => {
+    const { paths, cleanup } = await tempJournal();
+    await writeState(paths, {
+      lastGameEnter: { args: { character: 'warlock' }, at: 1000 },
+      crashes: [{ at: 2000, harvestDir: 'crash-001' }],
+      logCursor: 'abc',
+      goal: 'find the foreground flag',
+    });
+    const state = await readState(paths);
+    assert.equal(state.lastGameEnter.args.character, 'warlock');
+    assert.equal(state.crashes.length, 1);
+    assert.equal(state.goal, 'find the foreground flag');
+    await cleanup();
+  });
+
+  await test('a corrupt state file reads as empty rather than taking the server down', async () => {
+    const { paths, cleanup } = await tempJournal();
+    await writeFile(paths.state, '{ this is not json', 'utf8');
+    const state = await readState(paths);
+    assert.equal(state.lastGameEnter, null);
+    await cleanup();
+  });
+
+  await test('an unwritable journal is reported, never thrown', async () => {
+    // The directory does not exist and cannot be created under a file.
+    const { paths, cleanup } = await tempJournal();
+    await writeFile(path.join(paths.dir, 'blocker'), 'x', 'utf8');
+    const blocked = {
+      dir: path.join(paths.dir, 'blocker'),
+      state: path.join(paths.dir, 'blocker', 'state.json'),
+      calls: path.join(paths.dir, 'blocker', 'calls.jsonl'),
+      notes: path.join(paths.dir, 'blocker', 'notes.jsonl'),
+    };
+    const write = await appendNote(blocked, { ts: 1, kind: 'finding', text: 'x' });
+    assert.equal(write.status, 'unavailable');
+    assert.ok(typeof write.reason === 'string' && write.reason.length > 0);
+    await cleanup();
+  });
+
+  await test('calls and notes append one JSON object per line', async () => {
+    const { paths, cleanup } = await tempJournal();
+    await appendCall(paths, { ts: 1, tool: 'console_run', args: { line: 'mem.read' }, status: 'ok', ms: 12 });
+    await appendCall(paths, { ts: 2, tool: 'game_enter', args: {}, status: 'failed', ms: 900 });
+    await appendNote(paths, { ts: 3, kind: 'finding', text: 'g_flagA reads 0 in both states' });
+    const calls = (await readFile(paths.calls, 'utf8')).trim().split('\n');
+    assert.equal(calls.length, 2);
+    assert.equal(JSON.parse(calls[1]).tool, 'game_enter');
+    const notes = await readNotes(paths, 10);
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0].kind, 'finding');
+    await cleanup();
+  });
+
+  await test('an oversized arg is truncated rather than written whole', async () => {
+    const { paths, cleanup } = await tempJournal();
+    await appendCall(paths, { ts: 1, tool: 'console_run', args: { line: 'x'.repeat(50_000) }, status: 'ok', ms: 1 });
+    const line = (await readFile(paths.calls, 'utf8')).trim();
+    assert.ok(line.length < 2_000, `a journal line grew to ${line.length} bytes`);
+    assert.ok(line.includes('truncated'));
+    await cleanup();
+  });
+
+  await test('a resume block is small, and leads with the goal and the findings', () => {
+    const notes = [
+      { ts: 1, kind: 'goal', text: 'find the foreground-lock flag' },
+      ...Array.from({ length: 30 }, (_, i) => ({ ts: 10 + i, kind: 'attempt', text: `tried rva ${i}` })),
+      { ts: 100, kind: 'finding', text: 'the static RVA reads 0 in both states' },
+    ];
+    const resume = buildResume(
+      { lastGameEnter: { args: { character: 'warlock' }, at: 500 }, crashes: [{ at: 900, harvestDir: 'crash-001' }], logCursor: 'c', goal: 'find the foreground-lock flag' },
+      notes,
+      1_000,
+    );
+    assert.equal(resume.goal, 'find the foreground-lock flag');
+    assert.ok(resume.recentNotes.length <= 5);
+    assert.equal(resume.crashes, 1);
+    assert.equal(resume.lastGameEnter.args.character, 'warlock');
+    assert.ok(JSON.stringify(resume).length < 2_000, 'a resume block lands in somebody\'s context');
+    assert.ok(resume.recentNotes.some((n) => n.kind === 'finding'), 'a finding must outrank an attempt');
   });
 
   const failed = results.filter((r) => !r.ok);

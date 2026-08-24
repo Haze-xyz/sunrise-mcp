@@ -22,7 +22,7 @@ const DEFAULT_GAME_DIR = 'E:\\Destiny_Sunrise';
 // while the script itself is still legitimately waiting for the window.
 const LAUNCH_TIMEOUT_MS = 180_000;
 
-function getGameDir(): string {
+export function getGameDir(): string {
   const fromEnv = process.env.SUNRISE_GAME_DIR;
   return fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_GAME_DIR;
 }
