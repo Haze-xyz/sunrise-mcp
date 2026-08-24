@@ -55,6 +55,8 @@ import {
   type PressResult,
 } from './keys.js';
 import { decideGameEnterAction } from './game-enter-decision.js';
+import { buildDigest, DEFAULT_RARE_THRESHOLD } from './log-parse.js';
+import { readWindow, MAX_OUTPUT_LINES } from './log-stream.js';
 import { getGameProcessInfo } from './tasklist.js';
 import { clearPressRecord, resolvePressedThisSession, writePressRecord, type PressRecord } from './press-record.js';
 import { createSerializer } from './serialize.js';
@@ -492,13 +494,34 @@ server.registerTool(
   },
 );
 
+const logFilterShape = {
+  ev: z.array(z.string()).optional().describe('Keep only these event names, e.g. ["assert","signon"].'),
+  level: z
+    .enum(['error', 'warn', 'info', 'debug'])
+    .optional()
+    .describe('Severity threshold, not an equality: "info" keeps error, warn and info.'),
+  channel: z.array(z.string()).optional().describe('Keep only these channels, e.g. ["server"].'),
+  text: z.string().optional().describe('Case-insensitive substring of the whole line.'),
+};
+
 server.registerTool(
   'log_read',
   {
     description:
-      `Returns the tail of sunrise.log (from ${getLogPath()}) without ever loading the whole file into memory. ` +
-      `Defaults to the last ${DEFAULT_LOG_LINES} lines; capped at ${MAX_LOG_LINES}. Throws a clear error if the ` +
-      'log does not exist yet, which means the game has never been launched.',
+      `Reads sunrise.log (from ${getLogPath()}). Called with no arguments it returns the last ` +
+      `${DEFAULT_LOG_LINES} lines, exactly as it always has. The three arguments below are what make it ` +
+      'usable over a long session, and on a long session they are not optional: the log was measured at ' +
+      "0.26 to 2.42 MB an hour, so reading it raw is the single largest consumer of an agent's context. " +
+      'Pass `since` with the `cursor` from the previous call to get only what is new -- the cursor also ' +
+      'detects the game having restarted and rotated its log, and says `rotated` rather than resuming ' +
+      'into unrelated bytes. Pass `filter` to keep only what you are looking at. Pass mode:"digest" to ' +
+      'get counts instead of lines: frequent events are tallied, and only the rare ones -- plus every warn ' +
+      'and error -- are quoted verbatim. Fed the checked-in 882-line fixture directly, that turns it into ' +
+      `34 lines; a single call still only considers the same up to ${MAX_OUTPUT_LINES} raw lines any other ` +
+      'call does before digesting them, so a backlog longer than that takes the same repeated `since` calls ' +
+      'either mode does -- digest just answers each one in far fewer lines. ' +
+      `A call returns at most ${MAX_OUTPUT_LINES} lines; when it caps, "dropped" says how many were left ` +
+      'and the cursor it hands back points at the first of them, so calling again loses nothing.',
     inputSchema: {
       lines: z
         .number()
@@ -506,13 +529,64 @@ server.registerTool(
         .positive()
         .max(MAX_LOG_LINES)
         .optional()
-        .describe(`Number of trailing lines to return (default ${DEFAULT_LOG_LINES}, max ${MAX_LOG_LINES}).`),
+        .describe(`Tail size when no cursor is given (default ${DEFAULT_LOG_LINES}, max ${MAX_LOG_LINES}).`),
+      since: z.string().optional().describe('A cursor from a previous call. Returns only what came after it.'),
+      filter: z.object(logFilterShape).optional().describe('Keep only matching lines.'),
+      mode: z
+        .enum(['lines', 'digest'])
+        .optional()
+        .describe('"lines" (default) returns the lines. "digest" returns counts plus the rare ones verbatim.'),
+      rareThreshold: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(`digest only: an event seen at most this many times is quoted (default ${DEFAULT_RARE_THRESHOLD}).`),
     },
   },
-  async ({ lines }): Promise<CallToolResult> => {
+  async ({ lines, since, filter, mode, rareThreshold }): Promise<CallToolResult> => {
     try {
-      const result = await readLog(lines);
-      return textResult(result);
+      // No cursor, no filter, no mode is the old call, and it keeps its old answer: a tail.
+      if (since === undefined && filter === undefined && mode === undefined) {
+        return textResult(await readLog(lines));
+      }
+      // zod's inferred type for each optional field is `T | undefined`, not the absent-or-T shape
+      // exactOptionalPropertyTypes wants for LogFilter, so each field is re-narrowed here rather
+      // than passed through as-is.
+      const normalizedFilter =
+        filter === undefined
+          ? undefined
+          : {
+              ...(filter.ev !== undefined ? { ev: filter.ev } : {}),
+              ...(filter.level !== undefined ? { level: filter.level } : {}),
+              ...(filter.channel !== undefined ? { channel: filter.channel } : {}),
+              ...(filter.text !== undefined ? { text: filter.text } : {}),
+            };
+      const window = await readWindow(getLogPath(), {
+        ...(since !== undefined ? { since } : {}),
+        ...(normalizedFilter !== undefined ? { filter: normalizedFilter } : {}),
+      });
+      const shared = {
+        path: getLogPath(),
+        cursor: window.cursor,
+        state: window.state,
+        scanned: window.scanned,
+        dropped: window.dropped,
+        ...(window.state === 'rotated'
+          ? {
+              note:
+                'The game restarted and rotated its log; this read starts from the new file. The ' +
+                'previous life\'s lines, if any, are in sunrise.log.old next to it -- this call does not read them.',
+            }
+          : {}),
+        ...(window.state === 'invalid'
+          ? { note: 'That cursor could not be read, so this call started from the top of the current file.' }
+          : {}),
+      };
+      if (mode === 'digest') {
+        return textResult({ ...shared, digest: buildDigest(window.records, rareThreshold) });
+      }
+      return textResult({ ...shared, lines: window.records.map((record) => record.raw) });
     } catch (err) {
       return errorResult(err);
     }
