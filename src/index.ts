@@ -494,6 +494,22 @@ server.registerTool(
   },
 );
 
+/**
+ * In digest mode the answer is small by construction, so the read may be wide: one call should be
+ * able to cover a whole night. Measured at 1.6 lines/s in steady state, eight hours is roughly
+ * 46,000 lines and 5.7 MB, so these bounds cover a night with room to spare. Capping the *input* at
+ * MAX_OUTPUT_LINES instead would defeat the mode entirely -- on the 882-line fixture it would digest
+ * only the first 400 lines and drop 482 uncounted, and on a night it would take well over a hundred
+ * calls to cover what one call is supposed to.
+ */
+const DIGEST_SCAN_LINES = 50_000;
+const DIGEST_SCAN_BYTES = 8 * 1024 * 1024;
+/**
+ * The digest's one unbounded part is its verbatim list -- a long night with many distinct rare
+ * events makes it grow. It is capped, and the omission is reported rather than hidden.
+ */
+const DIGEST_VERBATIM_LIMIT = 200;
+
 const logFilterShape = {
   ev: z.array(z.string()).optional().describe('Keep only these event names, e.g. ["assert","signon"].'),
   level: z
@@ -515,13 +531,14 @@ server.registerTool(
       'Pass `since` with the `cursor` from the previous call to get only what is new -- the cursor also ' +
       'detects the game having restarted and rotated its log, and says `rotated` rather than resuming ' +
       'into unrelated bytes. Pass `filter` to keep only what you are looking at. Pass mode:"digest" to ' +
-      'get counts instead of lines: frequent events are tallied, and only the rare ones -- plus every warn ' +
-      'and error -- are quoted verbatim. Fed the checked-in 882-line fixture directly, that turns it into ' +
-      `34 lines; a single call still only considers the same up to ${MAX_OUTPUT_LINES} raw lines any other ` +
-      'call does before digesting them, so a backlog longer than that takes the same repeated `since` calls ' +
-      'either mode does -- digest just answers each one in far fewer lines. ' +
-      `A call returns at most ${MAX_OUTPUT_LINES} lines; when it caps, "dropped" says how many were left ` +
-      'and the cursor it hands back points at the first of them, so calling again loses nothing.',
+      'get counts instead of lines: on a real 882-line log that is 34 lines out instead of 882, because ' +
+      'frequent events are counted and only rare ones (plus every warn and error) are quoted. Digest scans ' +
+      `up to ${DIGEST_SCAN_LINES} raw lines per call (versus ${MAX_OUTPUT_LINES} for a plain read), enough ` +
+      'for a whole night in one call; its own verbatim list is capped separately at ' +
+      `${DIGEST_VERBATIM_LIMIT}, and "verbatimOmitted" says how many did not fit when that is what caps. ` +
+      `A plain (non-digest) call returns at most ${MAX_OUTPUT_LINES} lines; when either mode's raw-line ` +
+      'cap is hit, "dropped" says how many were left and the cursor it hands back points at the first of ' +
+      'them, so calling again loses nothing.',
     inputSchema: {
       lines: z
         .number()
@@ -565,6 +582,9 @@ server.registerTool(
       const window = await readWindow(getLogPath(), {
         ...(since !== undefined ? { since } : {}),
         ...(normalizedFilter !== undefined ? { filter: normalizedFilter } : {}),
+        // Digest mode's answer is small by construction, so its input scan may be wide -- see
+        // DIGEST_SCAN_LINES's comment for why capping this at MAX_OUTPUT_LINES defeats the mode.
+        ...(mode === 'digest' ? { maxLines: DIGEST_SCAN_LINES, maxBytes: DIGEST_SCAN_BYTES } : {}),
       });
       const shared = {
         path: getLogPath(),
@@ -584,7 +604,13 @@ server.registerTool(
           : {}),
       };
       if (mode === 'digest') {
-        return textResult({ ...shared, digest: buildDigest(window.records, rareThreshold) });
+        const digest = buildDigest(window.records, rareThreshold);
+        const verbatimOmitted = Math.max(0, digest.verbatim.length - DIGEST_VERBATIM_LIMIT);
+        return textResult({
+          ...shared,
+          digest: { ...digest, verbatim: digest.verbatim.slice(0, DIGEST_VERBATIM_LIMIT) },
+          ...(verbatimOmitted > 0 ? { verbatimOmitted } : {}),
+        });
       }
       return textResult({ ...shared, lines: window.records.map((record) => record.raw) });
     } catch (err) {

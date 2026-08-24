@@ -63,12 +63,18 @@ export function parseLogLine(raw: string): LogRecord {
     const key = trimmed.slice(index, equals);
     if (key === 'text') {
       // The sink emits text last precisely because its value may contain spaces.
-      fields.text = trimmed.slice(equals + 1);
+      if (!(key in fields)) fields.text = trimmed.slice(equals + 1);
       break;
     }
     let end = trimmed.indexOf(' ', equals + 1);
     if (end === -1) end = trimmed.length;
-    fields[key] = trimmed.slice(equals + 1, end);
+    // First occurrence wins. The sink writes its own fields at the head of the line and the
+    // event's payload after them, so a repeated key is payload shadowing a header -- and one real
+    // line in the fixture does exactly that: ev=graphics carries a driver feature level=0xB000
+    // long after the sink's own level=info. Letting the later one win turned that line's severity
+    // into a value matchesFilter cannot rank, so it passed every severity filter, including a
+    // request for errors.
+    if (!(key in fields)) fields[key] = trimmed.slice(equals + 1, end);
     index = end + 1;
   }
 

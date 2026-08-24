@@ -68,6 +68,18 @@ async function main() {
     assert.equal(rec.fields.text, 'world_controller: Leaving state for reason x.');
   });
 
+  await test('a repeated key keeps the first occurrence, not the last', () => {
+    // A real line from the checked-in fixture. The second level= is a graphics driver feature
+    // level, not a severity; last-wins made this info line rank as unknown, and an unknown level
+    // is never filtered out -- so asking for errors returned a message about the graphics probe.
+    const rec = parseLogLine(
+      'client level=info t=1313 ev=graphics stage=probe result=ok driver=hardware level=0xB000',
+    );
+    assert.equal(rec.level, 'info');
+    assert.equal(rec.fields.level, 'info');
+    assert.equal(matchesFilter(rec, { level: 'error' }), false);
+  });
+
   await test('a text= out of position silently absorbs every field after it', () => {
     // The real sink always emits text= last -- that is the contract parseLogLine relies on. This
     // pins what happens if a line ever broke that contract: no throw, no warning, and the fields
