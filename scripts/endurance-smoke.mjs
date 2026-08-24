@@ -152,6 +152,56 @@ async function main() {
     assert.equal(result.reason, undefined);
   });
 
+  await test('a count is not carried across a rotation', async () => {
+    // Two occurrences before the game restarts, one after: without a reset, count:3 would be
+    // satisfied by summing across two different lives of the game, one of them already gone.
+    let call = 0;
+    const deps = {
+      readWindow: async () => {
+        call += 1;
+        if (call === 1) {
+          return {
+            records: ['client level=info t=1 ev=tick', 'client level=info t=2 ev=tick'].map(parseLogLine),
+            cursor: 'cursor-1',
+            state: 'resumable',
+          };
+        }
+        return {
+          records: ['client level=info t=1 ev=tick'].map(parseLogLine),
+          cursor: 'cursor-2',
+          state: call === 2 ? 'rotated' : 'resumable',
+        };
+      },
+      isGameAlive: async () => true,
+      now: () => 0,
+      sleep: async () => {},
+      onProgress: () => {},
+    };
+    const result = await waitFor(deps, { filter: { ev: ['tick'] }, count: 3, timeoutMs: 5_000, pollMs: 10 });
+    // The rotated read holds only ONE tick, not the third of three: without the reset this would
+    // wrongly match right there (2 carried over + 1 new = 3).
+    assert.equal(result.matched, false);
+    assert.equal(result.reason, 'rotated');
+  });
+
+  await test('an invalid cursor is reported, not treated as a fresh match', async () => {
+    // log_read answers state:"invalid" with a note; a wait_for handed the same invalid cursor must
+    // not silently full-scan the file and report whatever it finds as a brand new match -- that scan
+    // can span hours of history the caller has already read and acted on.
+    const line = 'client level=info t=1 ev=world_loaded result=ok';
+    const deps = {
+      readWindow: async () => ({ records: [line].map(parseLogLine), cursor: 'cursor-fresh', state: 'invalid' }),
+      isGameAlive: async () => true,
+      now: () => 0,
+      sleep: async () => {},
+      onProgress: () => {},
+    };
+    const result = await waitFor(deps, { filter: { ev: ['world_loaded'] }, since: 'garbage', timeoutMs: 5_000, pollMs: 500 });
+    assert.equal(result.matched, false);
+    assert.equal(result.reason, 'cursorInvalid');
+    assert.equal(result.line, undefined);
+  });
+
   await test('count waits for the nth occurrence, not the first', async () => {
     const { deps } = world({
       reads: [
@@ -259,7 +309,7 @@ async function main() {
     const calls = (await readFile(paths.calls, 'utf8')).trim().split('\n');
     assert.equal(calls.length, 2);
     assert.equal(JSON.parse(calls[1]).tool, 'game_enter');
-    const notes = await readNotes(paths, 10);
+    const notes = await readNotes(paths);
     assert.equal(notes.length, 1);
     assert.equal(notes[0].kind, 'finding');
     await cleanup();
@@ -329,6 +379,25 @@ async function main() {
     assert.equal(resume.lastGameEnter.args.character, 'warlock');
     assert.ok(JSON.stringify(resume).length < 2_000, 'a resume block lands in somebody\'s context');
     assert.ok(resume.recentNotes.some((n) => n.kind === 'finding'), 'a finding must outrank an attempt');
+  });
+
+  await test('a finding written early survives 205 later attempts (finding I6)', async () => {
+    // Measured on the version this replaces: readNotes(paths, 200) took the last 200 lines BY FILE
+    // POSITION before buildResume ever ranked them, so 5 findings then 205 attempts left the window
+    // holding only attempts -- the resume showed five attempts and no finding at all. readNotes is
+    // unbounded now; ranking the whole file, then slicing, is buildResume's job alone.
+    const { paths, cleanup } = await tempJournal();
+    for (let i = 0; i < 5; i += 1) {
+      await appendNote(paths, { ts: i, kind: 'finding', text: `finding ${i}` });
+    }
+    for (let i = 0; i < 205; i += 1) {
+      await appendNote(paths, { ts: 5 + i, kind: 'attempt', text: `tried rva ${i}` });
+    }
+    const notes = await readNotes(paths);
+    assert.equal(notes.length, 210, 'readNotes must not window before buildResume ranks');
+    const resume = buildResume(await readState(paths), notes, 1_000);
+    assert.ok(resume.recentNotes.some((n) => n.kind === 'finding'), 'a finding from early in the file must still surface');
+    await cleanup();
   });
 
   await test('a live game is simply let through', () => {

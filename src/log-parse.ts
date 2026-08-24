@@ -62,8 +62,11 @@ export function parseLogLine(raw: string): LogRecord {
     if (equals === -1) break;
     const key = trimmed.slice(index, equals);
     if (key === 'text') {
-      // The sink emits text last precisely because its value may contain spaces.
-      if (!(key in fields)) fields.text = trimmed.slice(equals + 1);
+      // The sink emits text last precisely because its value may contain spaces. Unlike the
+      // repeated-key guard just below (load-bearing: the ev=graphics fixture line carries a real
+      // key twice before text=), no guard is needed here -- this branch breaks immediately, so a
+      // single parse can only ever reach it once, and fields.text cannot already be set by then.
+      fields.text = trimmed.slice(equals + 1);
       break;
     }
     let end = trimmed.indexOf(' ', equals + 1);
