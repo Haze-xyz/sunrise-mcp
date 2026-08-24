@@ -412,6 +412,18 @@ const GAME_FACING_TOOLS = new Set([
 
 /** Last time anything proved the game was alive. A successful game-facing call is such a proof. */
 let lastProofOfLifeMs = 0;
+/**
+ * True once the current dead game has been counted and harvested. Cleared the moment the game is
+ * seen running again.
+ *
+ * A crash is an event; runPreflight sees a state. Without this flag it records one crash per
+ * *observation* of the same dead game, and the arithmetic is brutal: an agent polling every few
+ * seconds turns one death into three within ten seconds, trips the loop breaker, and then refreshes
+ * the ten-minute window with every later call -- so the lockout never ages out on its own, and each
+ * call writes another crash-NNN copy of the same log. Measured. The case it bites hardest is the one
+ * that matters most: a broken install where launchGame keeps failing.
+ */
+let deadSpellRecorded = false;
 /** How stale that proof may be before tasklist is spawned again. */
 const PROOF_OF_LIFE_TTL_MS = 5_000;
 let resumeAttached = false;
@@ -427,6 +439,7 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
   const info = await getGameProcessInfo();
   if (info.running) {
     lastProofOfLifeMs = Date.now();
+    deadSpellRecorded = false;
     return null;
   }
 
@@ -436,13 +449,22 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
   const action = decideSupervisorAction({ gameAlive: false, now, crashes: state.crashes }, policy);
   if (action === 'proceed') return null;
 
+  if (action === 'refuse') {
+    return {
+      blocked: true,
+      action,
+      policy,
+      message:
+        'The game is not running. SUNRISE_MCP_SUPERVISOR is "report", so nothing was restarted. Start it ' +
+        'with game_launch, which this check does not gate. Do NOT reach for game_enter: it is gated by ' +
+        'this same check, so it would come straight back here with this message.',
+    };
+  }
+
+  const firstSighting = !deadSpellRecorded;
   const harvestDir = path.join(paths.dir, `crash-${String(state.crashes.length + 1).padStart(3, '0')}`);
   const includeOld = state.crashes.length === 0;
   const meta = { at: now, tool: toolName, lastGameEnter: state.lastGameEnter, goal: state.goal, policy, action };
-
-  if (action === 'refuse') {
-    return { blocked: true, action, policy, message: 'The game is not running. SUNRISE_MCP_SUPERVISOR is "report", so nothing was restarted. Call game_enter yourself.' };
-  }
 
   const io: HarvestIo = {
     copyLog: async (dir) => { await mkdir(dir, { recursive: true }); await copyFile(getLogPath(), path.join(dir, 'sunrise.log')); },
@@ -455,26 +477,37 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
   };
 
   let harvestError: string | null = null;
-  try {
-    await harvestThenRestart(io, { harvestDir, includeOld, meta });
-  } catch (err) {
-    harvestError = err instanceof Error ? err.message : String(err);
+  if (firstSighting) {
+    try {
+      await harvestThenRestart(io, { harvestDir, includeOld, meta });
+    } catch (err) {
+      harvestError = err instanceof Error ? err.message : String(err);
+    }
+    // Set even when the harvest threw: the flag means this dead spell has been handled once, and
+    // retrying a harvest that just failed would only add a second failure and a second directory.
+    deadSpellRecorded = true;
+    await writeState(paths, { ...state, crashes: [...state.crashes, { at: now, harvestDir }] });
+  } else if (action === 'harvestAndRestart') {
+    // Already counted, already harvested, and the game is still down. Try to bring it back without
+    // touching the journal again -- a launch that keeps failing must not read as more crashes.
+    await launchGame();
   }
 
-  const crashes = [...state.crashes, { at: now, harvestDir }];
-  await writeState(paths, { ...state, crashes });
+  const crashCount = state.crashes.length + (firstSighting ? 1 : 0);
 
   if (action === 'harvestAndStop') {
     return {
       blocked: true,
       action,
       policy,
-      crashes: crashes.length,
-      harvestDir: path.win32.normalize(harvestDir),
+      crashes: crashCount,
+      ...(firstSighting ? { harvestDir: path.win32.normalize(harvestDir) } : {}),
       message:
         `The game has crashed ${CRASH_LIMIT} times within ${CRASH_WINDOW_MS / 60_000} minutes. It was NOT restarted ` +
-        'again: a night spent relaunching is a night lost. The logs from each crash are in the journal. ' +
-        'Fix the cause, or call game_enter yourself to override.',
+        'again: a night spent relaunching is a night lost. The log of each crash is in the journal. Fix the ' +
+        'cause, then start the game with game_launch -- this check does not gate it, whereas game_enter is ' +
+        'gated and would come straight back here. Nothing further is counted or harvested while the game ' +
+        'stays down; the count ages out ten minutes after the last crash.',
       ...(harvestError !== null ? { harvestError } : {}),
     };
   }
@@ -486,8 +519,8 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
     blocked: false,
     action,
     policy,
-    crashes: crashes.length,
-    harvestDir: path.win32.normalize(harvestDir),
+    crashes: crashCount,
+    ...(firstSighting ? { harvestDir: path.win32.normalize(harvestDir) } : {}),
     message:
       'The game was not running -- it crashed or was closed. Its logs were harvested into the journal ' +
       'BEFORE the restart, because the game overwrites the previous log at every start. The game has been ' +
