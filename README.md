@@ -150,7 +150,8 @@ need to wait for a load after launching before calling `console_run` or `console
 
 ## The tools
 
-Six base tools, all over the console endpoint:
+Ten tools. `console_run` and `console_describe` talk to the console endpoint directly; the rest
+work through the game process, its log, its settings file, or the on-disk journal:
 
 | Tool | Input | Output |
 |---|---|---|
@@ -161,9 +162,9 @@ Six base tools, all over the console endpoint:
 | `game_kill` | — | `taskkill /IM destiny2.exe /F`, then waits for the process to actually leave the process table. Safe to call when the game isn't running. |
 | `log_read` | `lines?: number` | The tail of `sunrise.log` (default 200 lines, capped at 1000). |
 | `game_enter` | `character?: string` | Launches if needed, gets past the title screen, and waits for the world to load. With a character named, enters the world as that character and reports which one actually got in; without one, leaves the game at character selection. |
-| `wait_for` | Blocks until a matching log line appears, then returns it plus a digest of everything else. Use instead of polling `log_read`. |
-| `journal_note` | Writes one finding to the on-disk journal, so it survives this session dying. |
-| `journal_resume` | Returns what previous sessions left behind: goal, findings, crashes, last character. |
+| `wait_for` | `ev?`, `level?`, `channel?`, `text?`, `count?`, `timeoutMs?`, `since?` | Blocks until a matching log line appears, then returns it plus a digest of everything else read while waiting. Use instead of polling `log_read`. |
+| `journal_note` | `text: string`, `kind?` | Writes one line to the on-disk journal, so it survives this session dying. |
+| `journal_resume` | — | What previous sessions left behind: goal, findings, crashes, last character, log cursor. |
 
 `console_describe` is authoritative for which console entries exist (`console.*`, `log.*`,
 `movement.*`, `player.*`, `input.*`, `mem.*`, `character.*`, `bootflow.character_step`, and more
