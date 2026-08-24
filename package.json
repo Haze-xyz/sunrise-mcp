@@ -23,7 +23,8 @@
     "test:overlay": "npm run build && node scripts/overlay-smoke.mjs",
     "test:deploy": "npm run build && node scripts/deploy-smoke.mjs",
     "test:log": "npm run build && node scripts/log-smoke.mjs",
-    "test:endurance": "npm run build && node scripts/endurance-smoke.mjs"
+    "test:endurance": "npm run build && node scripts/endurance-smoke.mjs",
+    "test:wrapper": "npm run build && node scripts/wrapper-smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

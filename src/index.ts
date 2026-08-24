@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Sunrise MCP server: six tools over stdio, backed by the console endpoint client (endpoint.ts),
+ * Sunrise MCP server: ten base tools plus the self-registering capability plugins, over stdio,
+ * backed by the console endpoint client (endpoint.ts),
  * the Windows game/log helpers (game.ts), the title-screen key-press helpers (keys.ts), game_enter's
  * pure branch-selection logic (game-enter-decision.ts), destiny2.exe process lookup (tasklist.ts),
  * and its durable press record (press-record.ts). See README.md for the WSL-vs-Windows constraint —
@@ -9,7 +10,8 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type { CallToolResult, ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 import { SunriseEndpointClient, type DescribeResponse, type RunResponse } from './endpoint.js';
@@ -79,11 +81,12 @@ import {
   readNotes,
   readState,
   rememberLogCursor,
+  serializeStateWrite,
   shouldAttachResume,
   writeState,
 } from './journal.js';
 import type { JournalPaths, JournalWrite } from './journal.js';
-import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, stat, writeFile } from 'node:fs/promises';
 import type { HarvestIo } from './supervisor.js';
 import { CRASH_LIMIT, CRASH_WINDOW_MS, decideSupervisorAction, harvestThenRestart, readPolicy } from './supervisor.js';
 
@@ -400,7 +403,12 @@ async function verifyCharacterEntered(
     : { ok: false, stage: verdict.stage, message: verdict.message, character };
 }
 
-/** Tools that need the game up. The rest -- install_check, fork_build, dll_deploy, sync -- must work with it down. */
+/**
+ * Tools recorded in the journal (one call entry, every time) and eligible for the automatic resume
+ * block on this process's first call. The rest -- install_check, fork_build, dll_deploy, sync_*,
+ * journal_note, journal_resume -- must work with the game down, by design, so they sit outside both
+ * this set and PREFLIGHT_TOOLS below.
+ */
 const GAME_FACING_TOOLS = new Set([
   'console_run',
   'console_describe',
@@ -411,7 +419,19 @@ const GAME_FACING_TOOLS = new Set([
   'struct_read',
 ]);
 
-/** Last time anything proved the game was alive. A successful game-facing call is such a proof. */
+/**
+ * The subset of GAME_FACING_TOOLS gated behind runPreflight -- every one of them except game_kill.
+ *
+ * Gating a kill behind "prove the game is alive first" is finding C2: on a dead game it makes the
+ * supervisor harvest, fabricate a crash record, and launch the game (up to LAUNCH_TIMEOUT_MS, a
+ * full boot) -- only for this same call to then kill what it just started. game_kill must run, and
+ * only do its own job (tear the game down, or confirm it is already down), whether the game is up
+ * or already down; it is still journaled and still resume-eligible, just never preflighted.
+ */
+const PREFLIGHT_TOOLS = new Set(GAME_FACING_TOOLS);
+PREFLIGHT_TOOLS.delete('game_kill');
+
+/** Last time anything proved the game was alive. 0 means "no such proof, or it was just disproved". */
 let lastProofOfLifeMs = 0;
 /**
  * True once the current dead game has been counted and harvested. Cleared the moment the game is
@@ -425,9 +445,50 @@ let lastProofOfLifeMs = 0;
  * that matters most: a broken install where launchGame keeps failing.
  */
 let deadSpellRecorded = false;
-/** How stale that proof may be before tasklist is spawned again. */
+/** How stale a proof of life may be before tasklist is spawned again. */
 const PROOF_OF_LIFE_TTL_MS = 5_000;
 let resumeAttached = false;
+/**
+ * Whether sunrise.log.old has been harvested at least once in THIS PROCESS's life. Per-process, not
+ * per-journal -- see finding I7 and HarvestPlan.includeOld's own comment in supervisor.ts for why
+ * `state.crashes.length === 0` (an earlier version) is the wrong thing to read this from.
+ */
+let oldLogHarvestedThisProcess = false;
+
+/**
+ * Marks the game observed alive right now: refreshes the liveness TTL and clears any pending
+ * dead-spell flag, so the NEXT death is treated as a new event rather than folded into whichever one
+ * was already harvested. Called only where a success genuinely proves it -- see finding C1 and
+ * withEndurance's own comment below for which tools that is and which it is not.
+ */
+function recordProofOfLife(): void {
+  lastProofOfLifeMs = Date.now();
+  deadSpellRecorded = false;
+}
+
+/** Marks the game observed as NOT alive right now: expires the TTL so the next preflighted call
+ *  re-checks tasklist instead of trusting a proof that has just been disproved. */
+function expireProofOfLife(): void {
+  lastProofOfLifeMs = 0;
+}
+
+/**
+ * Picks the next crash-NNN directory, starting from `minIndex` but skipping any number a directory
+ * already exists for. See its call site (finding I1, "related, same fix area") for why
+ * state.crashes.length alone is not a safe source for this number.
+ */
+async function nextHarvestDir(journalDir: string, minIndex: number): Promise<string> {
+  let n = minIndex;
+  for (;;) {
+    const candidate = path.join(journalDir, `crash-${String(n).padStart(3, '0')}`);
+    try {
+      await stat(candidate);
+    } catch {
+      return candidate; // Nothing there yet -- this number is free.
+    }
+    n += 1;
+  }
+}
 
 /**
  * Checks the game is up, and acts on it if it is not. Returns null when there was nothing to say.
@@ -439,8 +500,7 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
   if (Date.now() - lastProofOfLifeMs < PROOF_OF_LIFE_TTL_MS) return null;
   const info = await getGameProcessInfo();
   if (info.running) {
-    lastProofOfLifeMs = Date.now();
-    deadSpellRecorded = false;
+    recordProofOfLife();
     return null;
   }
 
@@ -463,8 +523,11 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
   }
 
   const firstSighting = !deadSpellRecorded;
-  const harvestDir = path.join(paths.dir, `crash-${String(state.crashes.length + 1).padStart(3, '0')}`);
-  const includeOld = state.crashes.length === 0;
+  // Computed lazily, inside the firstSighting branch below: it depends on a disk scan (see
+  // nextHarvestDir) and is only ever used when this call actually harvests.
+  let harvestDir = '';
+  // Per-process, not per-journal -- see oldLogHarvestedThisProcess's own comment and finding I7.
+  const includeOld = !oldLogHarvestedThisProcess;
   const meta = { at: now, tool: toolName, lastGameEnter: state.lastGameEnter, goal: state.goal, policy, action };
 
   /** What the relaunch actually answered, when one was attempted. */
@@ -486,11 +549,21 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
 
   let harvestError: string | null = null;
   if (firstSighting) {
+    // Related to I1: state.crashes.length is where the crash NUMBER comes from too, and it is only
+    // as reliable as the writeState call three lines below. If a PREVIOUS crash's writeState failed
+    // (journal dir turned unwritable, then recovered), that crash never made it into state.json, so
+    // trusting the count alone would compute the SAME number again here and silently overwrite the
+    // first crash's copied log and meta.json with this one's. Checking the disk directly is what
+    // makes the number collision-proof regardless of what state.json does or does not remember.
+    harvestDir = await nextHarvestDir(paths.dir, state.crashes.length + 1);
     try {
       await harvestThenRestart(io, { harvestDir, includeOld, meta });
     } catch (err) {
       harvestError = err instanceof Error ? err.message : String(err);
     }
+    // Set even when the harvest threw, same reasoning as deadSpellRecorded just below: retrying a
+    // step that just failed only adds a second failure, not a second chance at capturing .old.
+    if (includeOld) oldLogHarvestedThisProcess = true;
     // Set even when the harvest threw: the flag means this dead spell has been handled once, and
     // retrying a harvest that just failed would only add a second failure and a second directory.
     deadSpellRecorded = true;
@@ -562,6 +635,10 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
   };
 }
 
+/** What every wrapped tool's actual callback receives as its second argument -- the SDK's own
+ *  per-request extras (progress/cancellation plumbing, `_meta` off the original request). */
+type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+
 /**
  * Wraps a game-facing tool with the three things that make a long unattended run possible: the
  * journal entry, the liveness preflight, and -- once per process -- the resume block.
@@ -569,18 +646,28 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
  * The preflight is lazy on purpose. A successful round trip to the game is already proof it is
  * alive, so tasklist.exe is only spawned when that proof has gone stale; spawning it on every call
  * would add about 100ms to everything for an answer we usually already have.
+ *
+ * Preflight calls run through serializeStateWrite (journal.ts), the same queue every state.json
+ * read-modify-write cycle shares -- see finding I2. Two overlapping preflights on a dead game would
+ * otherwise both see "not yet harvested", both harvest into one directory, and both call
+ * launchGame(), which kills any existing instance first -- so the second launch kills the game the
+ * first one just started.
  */
 function withEndurance<A extends Record<string, unknown>>(
   name: string,
-  handler: (args: A) => Promise<CallToolResult>,
-): (args: A) => Promise<CallToolResult> {
-  return async (args: A): Promise<CallToolResult> => {
+  // extra is optional here (not on wait_for's own handler below) because two of the seven wrapped
+  // tools -- console_describe, game_kill -- declare no inputSchema at all, and the SDK's own
+  // ToolCallback type collapses to a single-argument (extra) => Result shape for those: this wrapper
+  // must stay callable that way too, i.e. with only one positional argument.
+  handler: (args: A, extra?: ToolExtra) => Promise<CallToolResult>,
+): (args: A, extra?: ToolExtra) => Promise<CallToolResult> {
+  return async (args: A, extra?: ToolExtra): Promise<CallToolResult> => {
     const paths = journalPaths();
     const startedAt = Date.now();
     let supervisorReport: Record<string, unknown> | null = null;
 
-    if (GAME_FACING_TOOLS.has(name)) {
-      supervisorReport = await runPreflight(paths, name);
+    if (PREFLIGHT_TOOLS.has(name)) {
+      supervisorReport = await serializeStateWrite(() => runPreflight(paths, name));
       if (supervisorReport !== null && supervisorReport.blocked === true) {
         await appendCall(paths, { ts: startedAt, tool: name, args, status: 'blocked', ms: Date.now() - startedAt });
         return {
@@ -590,15 +677,31 @@ function withEndurance<A extends Record<string, unknown>>(
       }
     }
 
-    const result = await handler(args);
-    // game_kill succeeding proves the OPPOSITE of liveness -- killGame even waits for the process to
-    // leave the process table before saying so. Refreshing the proof here would let the next call
-    // inside the TTL skip the preflight entirely and meet a raw connection error instead of the
+    const result = await handler(args, extra);
+    // Whether a SUCCESSFUL call is itself proof the game is alive right now depends on the tool --
+    // see finding C1. console_run, console_describe, game_enter and struct_read could only have
+    // succeeded against a running game, so those stamp the proof (and forgive the current dead
+    // spell: recordProofOfLife clears deadSpellRecorded too, so the NEXT death is a new event, not
+    // the one already harvested). log_read succeeds whether or not the game exists -- it reads a
+    // file -- so it must never stamp anything either way. game_kill succeeding proves the OPPOSITE
+    // of liveness -- killGame even waits for the process to leave the process table before saying
+    // so -- so it expires the proof instead of refreshing it; refreshing it here would let the next
+    // call inside the TTL skip the preflight entirely and meet a raw connection error instead of the
     // supervisor, and "game_kill, then a game-facing call" is a sequence this server's own failure
-    // messages recommend. Found only by driving the real game: no fixture reaches it.
-    if (result.isError !== true) lastProofOfLifeMs = name === 'game_kill' ? 0 : Date.now();
+    // messages recommend. wait_for is handled inside its own tool body below, at the exact point its
+    // polling loop calls isGameAlive() -- a generic rule here would credit a match landing on the
+    // very first read, before the loop ever probed the process, with proof it never gathered.
+    if (result.isError !== true) {
+      if (name === 'game_kill') expireProofOfLife();
+      else if (name !== 'log_read' && name !== 'wait_for') recordProofOfLife();
+    }
 
-    await appendCall(paths, {
+    // Captured, not discarded (finding I1): every one of these used to be fire-and-forget, so a
+    // journal directory that turned unwritable partway through a night was invisible to all seven
+    // wrapped tools -- calls, cursor and crash records all lost with no signal, and the loop breaker
+    // silently disabled along with them. Reported in extras.journal below, same as the blocked path
+    // just above already does with its own appendCall.
+    const callWrite = await appendCall(paths, {
       ts: startedAt,
       tool: name,
       args,
@@ -608,15 +711,23 @@ function withEndurance<A extends Record<string, unknown>>(
 
     const extras: Record<string, unknown> = {};
     if (supervisorReport !== null) extras.supervisor = supervisorReport;
-    // Guarded on resumeAttached FIRST: once the resume has ridden out, this flag can never flip
-    // back, so reading state.json again on every later call of the night would buy nothing.
+    if (callWrite.status !== 'ok') extras.journal = callWrite;
+    // Claimed synchronously, before the only await below: two calls racing here must not both pass
+    // the history check and both attach a resume block (finding I2). There is no await between the
+    // outer condition and this assignment, so whichever call's synchronous slice runs first is the
+    // only one that can ever see resumeAttached still false.
     if (!resumeAttached && GAME_FACING_TOOLS.has(name)) {
+      resumeAttached = true;
       const state = await readState(paths);
-      const hasHistory = state.goal !== null || state.lastGameEnter !== null || state.crashes.length > 0;
-      if (shouldAttachResume(resumeAttached, hasHistory)) {
-        resumeAttached = true;
+      const notes = await readNotes(paths);
+      // notes.length > 0 is finding I4: a session whose only output was journal_note calls (goal,
+      // lastGameEnter and crashes all still null/empty) used to hand the next session nothing, even
+      // though writing findings without ever touching the game is exactly the pure-RE use case this
+      // whole resume mechanism targets.
+      const hasHistory = state.goal !== null || state.lastGameEnter !== null || state.crashes.length > 0 || notes.length > 0;
+      if (shouldAttachResume(false, hasHistory)) {
         extras.resume = {
-          ...buildResume(state, await readNotes(paths, 200), Date.now()),
+          ...buildResume(state, notes, Date.now()),
           // Only the automatic path says this. buildResume also serves journal_resume, where the
           // agent asked on purpose -- telling it that it did not would simply be false, and this
           // block is data an agent acts on, not documentation.
@@ -838,6 +949,11 @@ server.registerTool(
         // DIGEST_SCAN_LINES's comment for why capping this at MAX_OUTPUT_LINES defeats the mode.
         ...(mode === 'digest' ? { maxLines: DIGEST_SCAN_LINES, maxBytes: DIGEST_SCAN_BYTES } : {}),
       });
+      // Captured, not discarded (finding I1): a journal that cannot be written used to fail in
+      // total silence here -- state.json would silently stop accumulating the cursor, and nothing
+      // in this tool's own answer said so. journal_note (which is not wrapped by withEndurance) was
+      // the only tool that ever reported it.
+      const journalWrite = await rememberLogCursor(journalPaths(), window.cursor);
       const shared = {
         path: getLogPath(),
         cursor: window.cursor,
@@ -854,18 +970,17 @@ server.registerTool(
         ...(window.state === 'invalid'
           ? { note: 'That cursor could not be read, so this call started from the top of the current file.' }
           : {}),
+        ...(journalWrite.status !== 'ok' ? { journal: journalWrite } : {}),
       };
       if (mode === 'digest') {
         const digest = buildDigest(window.records, rareThreshold);
         const verbatimOmitted = Math.max(0, digest.verbatim.length - DIGEST_VERBATIM_LIMIT);
-        await rememberLogCursor(journalPaths(), window.cursor);
         return textResult({
           ...shared,
           digest: { ...digest, verbatim: digest.verbatim.slice(0, DIGEST_VERBATIM_LIMIT) },
           ...(verbatimOmitted > 0 ? { verbatimOmitted } : {}),
         });
       }
-      await rememberLogCursor(journalPaths(), window.cursor);
       return textResult({ ...shared, lines: window.records.map((record) => record.raw) });
     } catch (err) {
       return errorResult(err);
@@ -905,7 +1020,7 @@ server.registerTool(
       since: z.string().optional().describe('A cursor from a previous call; start watching from there.'),
     },
   },
-  withEndurance('wait_for', async ({ ev, level, channel, text, count, timeoutMs, since }): Promise<CallToolResult> => {
+  withEndurance('wait_for', async ({ ev, level, channel, text, count, timeoutMs, since }, extra): Promise<CallToolResult> => {
     try {
       const filter = {
         ...(ev !== undefined ? { ev } : {}),
@@ -916,27 +1031,51 @@ server.registerTool(
       if (Object.keys(filter).length === 0) {
         return errorResult(new Error('wait_for needs something to wait for: pass at least one of ev, level, channel or text.'));
       }
+      // Echoing the CALLER's own token (finding I3): the SDK client matches an incoming progress
+      // notification back to the pending request via Number(progressToken) (protocol.js), so a
+      // token this server invented instead ('wait_for', literally) can never match anything on the
+      // client side -- Number('wait_for') is NaN -- and produces a client-side error on every poll
+      // tick for a request that never asked for progress in the first place. No token means no
+      // notification, not an invented one.
+      // extra is only optional in withEndurance's own type (to also fit console_describe and
+      // game_kill, which take none) -- wait_for always declares an inputSchema, so the SDK always
+      // calls back with a real one; the `?.` below is defensive, not expected to ever bite.
+      const progressToken = extra?._meta?.progressToken;
       const result = await waitFor(
         {
           readWindow: async (cursor) => {
             const window = await readWindow(getLogPath(), { ...(cursor !== undefined ? { since: cursor } : {}) });
             return { records: window.records, cursor: window.cursor, state: window.state };
           },
-          isGameAlive: async () => (await getGameProcessInfo()).running,
+          // The one place wait_for's own liveness observation is real, at the moment it is actually
+          // made -- see finding C1. A live probe stamps the proof (and forgives the current dead
+          // spell); a dead one expires it immediately, so the very next preflighted call re-checks
+          // tasklist instead of trusting a TTL this same observation just disproved.
+          isGameAlive: async () => {
+            const alive = (await getGameProcessInfo()).running;
+            if (alive) recordProofOfLife();
+            else expireProofOfLife();
+            return alive;
+          },
           now: () => Date.now(),
           sleep: (ms) => sleep(ms),
-          // Only helps clients that set resetTimeoutOnProgress, which defaults to false and is the
-          // client's call, not ours -- but it costs nothing and it helps those that did.
-          onProgress: (waitedMs) => {
-            // Best effort only: a client that never asked for progress may reject or ignore this,
-            // and a rejected notification must not take down a wait that is working.
-            server.server
-              .notification({
-                method: 'notifications/progress',
-                params: { progressToken: 'wait_for', progress: waitedMs, total: timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS },
-              })
-              .catch(() => undefined);
-          },
+          ...(progressToken !== undefined
+            ? {
+                // Only helps clients that set resetTimeoutOnProgress, which defaults to false and is
+                // the client's call, not ours -- but costs nothing for the ones that did.
+                onProgress: (waitedMs: number) => {
+                  // Best effort only: a client that never asked for progress (handled above by
+                  // sending nothing at all) or one that rejects this anyway must not take down a
+                  // wait that is otherwise working.
+                  extra
+                    ?.sendNotification({
+                      method: 'notifications/progress',
+                      params: { progressToken, progress: waitedMs, total: timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS },
+                    })
+                    .catch(() => undefined);
+                },
+              }
+            : {}),
         },
         {
           filter,
@@ -946,8 +1085,12 @@ server.registerTool(
           ...(since !== undefined ? { since } : {}),
         },
       );
-      if (result.cursor.length > 0) await rememberLogCursor(journalPaths(), result.cursor);
-      return textResult(result);
+      // Captured, not discarded (finding I1): see log_read's identical comment above.
+      const journalWrite = result.cursor.length > 0 ? await rememberLogCursor(journalPaths(), result.cursor) : null;
+      return textResult({
+        ...result,
+        ...(journalWrite !== null && journalWrite.status !== 'ok' ? { journal: journalWrite } : {}),
+      });
     } catch (err) {
       return errorResult(err);
     }
@@ -1534,7 +1677,7 @@ server.registerTool(
   async (): Promise<CallToolResult> => {
     const paths = journalPaths();
     const state = await readState(paths);
-    const notes = await readNotes(paths, 200);
+    const notes = await readNotes(paths);
     return textResult(buildResume(state, notes, Date.now()));
   },
 );

@@ -11,6 +11,7 @@ import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/pr
 import path from 'node:path';
 
 import { getGameDir } from './game.js';
+import { createSerializer } from './serialize.js';
 
 /** Where the journal lives: beside logs\, inside the artifact directory the DLL already owns. */
 export interface JournalPaths {
@@ -172,7 +173,16 @@ async function rollIfLarge(file: string): Promise<void> {
   }
 }
 
-export async function readNotes(paths: JournalPaths, limit: number): Promise<Note[]> {
+/**
+ * Reads every note in the journal, oldest first. Unbounded on purpose -- see finding I6: an earlier
+ * version took the last N lines by FILE POSITION before buildResume ever ranked them by kind, so a
+ * long run of `attempt` notes after a handful of early `finding`/`goal` notes could push every
+ * finding out of the window entirely (measured: 5 findings then 205 attempts, capped at 200, showed
+ * five attempts and no finding -- the exact scenario buildResume's ranking exists to prevent). Rank
+ * the whole file, then slice: buildResume already caps its OWN output at RESUME_NOTES, so nothing
+ * upstream of it needs to guess a safe window.
+ */
+export async function readNotes(paths: JournalPaths): Promise<Note[]> {
   try {
     const text = await readFile(paths.notes, 'utf8');
     const notes: Note[] = [];
@@ -185,16 +195,29 @@ export async function readNotes(paths: JournalPaths, limit: number): Promise<Not
         // One unreadable line does not invalidate the rest of the journal.
       }
     }
-    return notes.slice(-limit);
+    return notes;
   } catch {
     return [];
   }
 }
 
+/**
+ * Serializes every read-modify-write cycle on state.json behind one in-process queue: state.json
+ * holds several independent facts (crash records, log cursor, goal, last game_enter) that different
+ * callers each read whole, change one part of, and write whole back -- runPreflight's crash append
+ * and rememberLogCursor's cursor update chief among them (see finding I2). Two such cycles
+ * overlapping is a lost update: whichever write lands second silently discards whatever the first
+ * one changed. Shared by every caller that touches state.json, so "read, decide, write" is atomic
+ * in practice even though nothing here uses a real lock.
+ */
+export const serializeStateWrite = createSerializer();
+
 /** Remembers where the last log read got to, so a resumed session does not re-read the night. */
 export async function rememberLogCursor(paths: JournalPaths, cursor: string): Promise<JournalWrite> {
-  const state = await readState(paths);
-  return writeState(paths, { ...state, logCursor: cursor });
+  return serializeStateWrite(async () => {
+    const state = await readState(paths);
+    return writeState(paths, { ...state, logCursor: cursor });
+  });
 }
 
 /**

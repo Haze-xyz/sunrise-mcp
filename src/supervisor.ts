@@ -69,7 +69,18 @@ export interface HarvestIo {
 
 export interface HarvestPlan {
   harvestDir: string;
-  /** True only for the first harvest of a session: sunrise.log.old still holds the life before it. */
+  /**
+   * True only for the first harvest THIS SERVER PROCESS performs: sunrise.log.old still holds the
+   * life before it. Every later crash in the same process duplicates a life already captured
+   * directly by an earlier crash's own copyLog, so once per process is not a shortcut -- it is
+   * complete.
+   *
+   * Must be driven by an in-process flag, not by anything read back from the journal on disk:
+   * state.crashes persists across nights, and using its length here (an earlier version's bug)
+   * means .old is captured only on the very first crash a journal has EVER recorded, and never
+   * again on the first crash of any later night -- which is exactly when .old holds a life nothing
+   * else in this session has captured yet.
+   */
   includeOld: boolean;
   meta: unknown;
 }
