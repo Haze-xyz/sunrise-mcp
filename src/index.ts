@@ -23,6 +23,7 @@ import {
   launchGame,
   readLog,
 } from './game.js';
+import type { LaunchResult } from './game.js';
 import {
   CHARACTER_CLASSES,
   CHARACTER_ENTERED_MARKER,
@@ -466,13 +467,20 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
   const includeOld = state.crashes.length === 0;
   const meta = { at: now, tool: toolName, lastGameEnter: state.lastGameEnter, goal: state.goal, policy, action };
 
+  /** What the relaunch actually answered, when one was attempted. */
+  let relaunch: LaunchResult | null = null;
+  /** Whether the crash record reached disk. A journal that refused it cannot trip the loop breaker. */
+  let journalWrite: JournalWrite | null = null;
+
   const io: HarvestIo = {
     copyLog: async (dir) => { await mkdir(dir, { recursive: true }); await copyFile(getLogPath(), path.join(dir, 'sunrise.log')); },
     copyOldLog: async (dir) => { await copyFile(`${getLogPath()}.old`, path.join(dir, 'sunrise.log.old')).catch(() => undefined); },
     writeMeta: async (dir, value) => { await writeFile(path.join(dir, 'meta.json'), `${JSON.stringify(value, null, 2)}\n`, 'utf8'); },
     restart: async () => {
       if (action === 'harvestAndStop') return;
-      await launchGame();
+      // Captured, not discarded: launchGame resolves {status:'failed'} rather than rejecting, so
+      // ignoring it is exactly how a message ends up announcing a relaunch that never happened.
+      relaunch = await launchGame();
     },
   };
 
@@ -486,11 +494,11 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
     // Set even when the harvest threw: the flag means this dead spell has been handled once, and
     // retrying a harvest that just failed would only add a second failure and a second directory.
     deadSpellRecorded = true;
-    await writeState(paths, { ...state, crashes: [...state.crashes, { at: now, harvestDir }] });
+    journalWrite = await writeState(paths, { ...state, crashes: [...state.crashes, { at: now, harvestDir }] });
   } else if (action === 'harvestAndRestart') {
     // Already counted, already harvested, and the game is still down. Try to bring it back without
     // touching the journal again -- a launch that keeps failing must not read as more crashes.
-    await launchGame();
+    relaunch = await launchGame();
   }
 
   const crashCount = state.crashes.length + (firstSighting ? 1 : 0);
@@ -503,12 +511,14 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
       crashes: crashCount,
       ...(firstSighting ? { harvestDir: path.win32.normalize(harvestDir) } : {}),
       message:
-        `The game has crashed ${CRASH_LIMIT} times within ${CRASH_WINDOW_MS / 60_000} minutes. It was NOT restarted ` +
+        `${CRASH_LIMIT} crashes landed within ${CRASH_WINDOW_MS / 60_000} minutes (${crashCount} recorded in all). ` +
+        'The game was NOT restarted ' +
         'again: a night spent relaunching is a night lost. The log of each crash is in the journal. Fix the ' +
         'cause, then start the game with game_launch -- this check does not gate it, whereas game_enter is ' +
         'gated and would come straight back here. Nothing further is counted or harvested while the game ' +
         'stays down; the count ages out ten minutes after the last crash.',
       ...(harvestError !== null ? { harvestError } : {}),
+      ...(journalWrite !== null && journalWrite.status !== 'ok' ? { journalWrite } : {}),
     };
   }
 
@@ -521,10 +531,17 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
     policy,
     crashes: crashCount,
     ...(firstSighting ? { harvestDir: path.win32.normalize(harvestDir) } : {}),
+    ...(relaunch !== null ? { relaunch: relaunch.status } : {}),
+    ...(journalWrite !== null && journalWrite.status !== 'ok' ? { journalWrite } : {}),
     message:
       'The game was not running -- it crashed or was closed. Its logs were harvested into the journal ' +
-      'BEFORE the restart, because the game overwrites the previous log at every start. The game has been ' +
-      'launched again. ' +
+      'BEFORE the restart, because the game overwrites the previous log at every start. ' +
+      // launchGame resolves rather than rejecting on failure, so this has to be read, not assumed:
+      // announcing a relaunch that did not happen is the same defect as pointing at a gated tool.
+      (relaunch === null || relaunch.status === 'launched'
+        ? 'The game has been launched again. '
+        : `The relaunch FAILED: ${relaunch.message} The game is still down -- start it with game_launch, ` +
+          'which this check does not gate. ') +
       (reentered
         ? `You were last in the world as ${JSON.stringify(state.lastGameEnter?.args)}. That entry has NOT been replayed ` +
           'automatically; call game_enter with those arguments if you want it back. Whatever position, activity or ' +
