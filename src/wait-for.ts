@@ -78,16 +78,22 @@ export async function waitFor(deps: WaitDeps, options: WaitOptions): Promise<Wai
   for (;;) {
     const window = await deps.readWindow(cursor);
     cursor = window.cursor;
-    if (window.state === 'rotated') {
-      seen.push(...window.records);
-      return finish({ matched: false, reason: 'rotated' });
-    }
+
+    // The match is tested before every exit reason, rotation included, and that ordering carries
+    // the correctness of this loop. A rotated read starts at the TOP of the new log, because
+    // cursorState resets the offset to 0 -- so it routinely already holds the early-boot line a
+    // caller is waiting for, ev=world_loaded above all. Reporting 'rotated' without testing those
+    // records would drop the match and hand back a cursor pointing past it, and calling again could
+    // never find it: across a game restart, the one event a caller most wants would be the one
+    // event denied to it.
     for (const record of window.records) {
       seen.push(record);
       if (!matchesFilter(record, options.filter)) continue;
       matches += 1;
       if (matches >= wanted) return finish({ matched: true, line: record.raw });
     }
+
+    if (window.state === 'rotated') return finish({ matched: false, reason: 'rotated' });
 
     // Checked every turn, not only at the deadline: a wait the game can no longer satisfy should
     // cost a second, not a minute.

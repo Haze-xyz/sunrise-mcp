@@ -633,8 +633,9 @@ server.registerTool(
       'it returns matched:false with a named reason and a cursor. "timeout" means keep going -- call ' +
       'again with that cursor and you resume exactly where this call stopped, so five minutes is six ' +
       'calls rather than one long one. "gameDied" means the game is gone and no amount of waiting will ' +
-      'change that. "rotated" means the game restarted and opened a fresh log; the cursor handed back ' +
-      'starts at the top of the new one.',
+      'change that. "rotated" means the game restarted and opened a fresh log: this call already scanned ' +
+      'that new log from its top and nothing in it matched, so the cursor handed back is where that ' +
+      'scan stopped -- call again with it to keep watching the new log.',
     inputSchema: {
       ev: z.array(z.string()).optional().describe('Wait for one of these event names, e.g. ["world_loaded"].'),
       level: z.enum(['error', 'warn', 'info', 'debug']).optional().describe('Severity threshold to match.'),

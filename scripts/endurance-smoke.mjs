@@ -126,6 +126,30 @@ async function main() {
     assert.equal(result.reason, 'rotated');
   });
 
+  await test('a match inside a rotated read wins over the rotation', async () => {
+    // The game restarting is the scenario this whole system exists for, and the rotated read is
+    // exactly where the awaited line lives: cursorState resets the offset to 0, so that read starts
+    // at the top of the new log and already holds ev=world_loaded. Reporting 'rotated' without
+    // testing those records drops the match and returns a cursor pointing past it -- measured, the
+    // line then appears only inside the digest and no later call can ever reach it again.
+    const line = 'client level=info t=6 ev=world_loaded result=ok';
+    const deps = {
+      readWindow: async () => ({
+        records: ['client level=info t=5 ev=signon', line].map(parseLogLine),
+        cursor: 'cursor-after-scan',
+        state: 'rotated',
+      }),
+      isGameAlive: async () => true,
+      now: () => 0,
+      sleep: async () => {},
+      onProgress: () => {},
+    };
+    const result = await waitFor(deps, { filter: { ev: ['world_loaded'] }, timeoutMs: 55_000, pollMs: 500 });
+    assert.equal(result.matched, true);
+    assert.equal(result.line, line);
+    assert.equal(result.reason, undefined);
+  });
+
   await test('count waits for the nth occurrence, not the first', async () => {
     const { deps } = world({
       reads: [
