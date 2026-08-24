@@ -364,6 +364,39 @@ async function main() {
   });
 
   // -------------------------------------------------------------------------------------------
+  // Fix 1 -- unlike the "two deaths" block above, NO call here ever observes the relaunched game
+  // alive before it dies again: the "two deaths" block's own part 2 does exactly that (a probe
+  // after sleeping past the TTL, which clears deadSpellRecorded through runPreflight's ordinary
+  // info.running branch), so it cannot tell a fixed relaunch-observation path from a broken one.
+  // Here the only thing that could clear deadSpellRecorded between the two crashes is the
+  // relaunch's own "launched" answer.
+  // -------------------------------------------------------------------------------------------
+  await withServer(true, async (sandbox, client) => {
+    await test('relaunch-as-proof-of-life setup: a live game is not blocked', async () => {
+      assert.equal(extractSupervisor(await probe(client)), null);
+    });
+
+    await test('a relaunch answering "launched" is itself proof of life, so the next death is its own crash-002', async () => {
+      await setFakeAlive(sandbox, false); // First death.
+      await sleep(PAST_TTL_MS);
+      const first = await probe(client); // Detects it, harvests crash-001, relaunches.
+      assert.equal(extractSupervisor(first).crashes, 1);
+
+      // The relaunched game dies again immediately -- no intervening call ever sees it alive.
+      await setFakeAlive(sandbox, false);
+      await sleep(PAST_TTL_MS);
+      const second = await probe(client);
+      const supervisor = extractSupervisor(second);
+      assert.notEqual(supervisor, null);
+      assert.equal(supervisor.crashes, 2, 'the second death must be its own crash, not folded into the first');
+
+      const state = await readJournalState(sandbox);
+      assert.equal(state.crashes.length, 2);
+      assert.ok(existsSync(path.join(sandbox.journalDir, 'crash-002', 'meta.json')), 'crash-002 must exist on disk');
+    });
+  });
+
+  // -------------------------------------------------------------------------------------------
   // C2 -- game_kill against an already-dead game must only report it is dead -- never launch it
   // first to satisfy a liveness check that was never its business to run.
   // -------------------------------------------------------------------------------------------

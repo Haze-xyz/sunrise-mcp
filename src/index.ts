@@ -574,6 +574,17 @@ async function runPreflight(paths: JournalPaths, toolName: string): Promise<Reco
     relaunch = await launchGame();
   }
 
+  // launchGame() only resolves "launched" once launch-game.ps1 has watched the game's own window
+  // come up, so a successful relaunch is not a guess about liveness -- it is a fresh, direct
+  // observation of it, exactly as good as a round trip that just succeeded against a running game.
+  // Recording it here, after deadSpellRecorded was set true above (both branches that can produce
+  // a relaunch run before this line), is what makes the NEXT death its own event instead of quietly
+  // reusing this one's: without it, a game that dies again before any OTHER call happens to observe
+  // it running stays folded into the spell already harvested -- never counted, never harvested a
+  // second time, and the crash-loop breaker never sees it. A relaunch that answers "failed" must
+  // NOT clear the flag: the game is still down, so this dead spell is not over yet.
+  if (relaunch !== null && relaunch.status === 'launched') recordProofOfLife();
+
   const crashCount = state.crashes.length + (firstSighting ? 1 : 0);
 
   if (action === 'harvestAndStop') {
