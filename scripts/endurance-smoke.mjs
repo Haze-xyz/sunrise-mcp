@@ -22,6 +22,7 @@ import path from 'node:path';
 import { parseLogLine } from '../dist/log-parse.js';
 import { DEFAULT_WAIT_TIMEOUT_MS, waitFor } from '../dist/wait-for.js';
 import { appendCall, appendNote, buildResume, readNotes, readState, writeState } from '../dist/journal.js';
+import { CRASH_LIMIT, CRASH_WINDOW_MS, decideSupervisorAction, harvestThenRestart } from '../dist/supervisor.js';
 
 const results = [];
 
@@ -328,6 +329,82 @@ async function main() {
     assert.equal(resume.lastGameEnter.args.character, 'warlock');
     assert.ok(JSON.stringify(resume).length < 2_000, 'a resume block lands in somebody\'s context');
     assert.ok(resume.recentNotes.some((n) => n.kind === 'finding'), 'a finding must outrank an attempt');
+  });
+
+  await test('a live game is simply let through', () => {
+    assert.equal(decideSupervisorAction({ gameAlive: true, now: 0, crashes: [] }, 'restart'), 'proceed');
+    assert.equal(decideSupervisorAction({ gameAlive: true, now: 0, crashes: [] }, 'report'), 'proceed');
+  });
+
+  await test('policy off never acts, even on a dead game', () => {
+    assert.equal(decideSupervisorAction({ gameAlive: false, now: 0, crashes: [] }, 'off'), 'proceed');
+  });
+
+  await test('policy report refuses instead of restarting', () => {
+    assert.equal(decideSupervisorAction({ gameAlive: false, now: 0, crashes: [] }, 'report'), 'refuse');
+  });
+
+  await test('the first two crashes restart, the third stops', () => {
+    const at = (...times) => times.map((t) => ({ at: t, harvestDir: 'x' }));
+    assert.equal(decideSupervisorAction({ gameAlive: false, now: 1_000, crashes: [] }, 'restart'), 'harvestAndRestart');
+    assert.equal(decideSupervisorAction({ gameAlive: false, now: 2_000, crashes: at(1_000) }, 'restart'), 'harvestAndRestart');
+    assert.equal(decideSupervisorAction({ gameAlive: false, now: 3_000, crashes: at(1_000, 2_000) }, 'restart'), 'harvestAndStop');
+    assert.equal(CRASH_LIMIT, 3);
+  });
+
+  await test('crashes older than the window do not count towards the loop', () => {
+    const old = [{ at: 0, harvestDir: 'x' }, { at: 1_000, harvestDir: 'x' }];
+    const now = CRASH_WINDOW_MS + 5_000;
+    assert.equal(decideSupervisorAction({ gameAlive: false, now, crashes: old }, 'restart'), 'harvestAndRestart');
+  });
+
+  await test('EVERY harvest step happens before the restart', async () => {
+    // The one ordering in this codebase whose failure is unrecoverable. The game rotates
+    // sunrise.log into sunrise.log.old at every start and keeps exactly one, so restarting first
+    // overwrites the previous crash with the current one: at the second crash of the night, the
+    // first no longer exists anywhere.
+    const seen = [];
+    await harvestThenRestart(
+      {
+        copyLog: async () => { seen.push('copyLog'); },
+        copyOldLog: async () => { seen.push('copyOldLog'); },
+        writeMeta: async () => { seen.push('writeMeta'); },
+        restart: async () => { seen.push('restart'); },
+      },
+      { harvestDir: 'crash-001', includeOld: true, meta: { at: 1 } },
+    );
+    assert.deepEqual(seen, ['copyLog', 'copyOldLog', 'writeMeta', 'restart']);
+    assert.equal(seen.indexOf('restart'), seen.length - 1, 'restart must be last, always');
+  });
+
+  await test('a harvest step that fails does not let the restart run anyway', async () => {
+    const seen = [];
+    await assert.rejects(() =>
+      harvestThenRestart(
+        {
+          copyLog: async () => { throw new Error('disk full'); },
+          copyOldLog: async () => { seen.push('copyOldLog'); },
+          writeMeta: async () => { seen.push('writeMeta'); },
+          restart: async () => { seen.push('restart'); },
+        },
+        { harvestDir: 'crash-001', includeOld: true, meta: {} },
+      ),
+    );
+    assert.equal(seen.includes('restart'), false, 'a failed harvest must not be followed by a restart');
+  });
+
+  await test('the previous life is copied only on the first harvest of a session', async () => {
+    const seen = [];
+    await harvestThenRestart(
+      {
+        copyLog: async () => { seen.push('copyLog'); },
+        copyOldLog: async () => { seen.push('copyOldLog'); },
+        writeMeta: async () => { seen.push('writeMeta'); },
+        restart: async () => { seen.push('restart'); },
+      },
+      { harvestDir: 'crash-002', includeOld: false, meta: {} },
+    );
+    assert.deepEqual(seen, ['copyLog', 'writeMeta', 'restart']);
   });
 
   const failed = results.filter((r) => !r.ok);

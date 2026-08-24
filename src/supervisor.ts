@@ -1,0 +1,86 @@
+/**
+ * Noticing that the game has died, keeping the evidence, and putting the world back.
+ *
+ * The decision is pure and the effects are injected, because the part worth getting right is an
+ * ordering, and an ordering is exactly what a test with a recorder can prove and a test with a real
+ * game cannot.
+ */
+
+import type { CrashRecord } from './journal.js';
+
+export type SupervisorPolicy = 'restart' | 'report' | 'off';
+
+export interface SupervisorObservation {
+  gameAlive: boolean;
+  now: number;
+  /** Crashes already recorded, oldest first. */
+  crashes: CrashRecord[];
+}
+
+export type SupervisorAction =
+  /** The game is up, or the supervisor is off. Do the call. */
+  | 'proceed'
+  /** Keep the evidence, then start the game again. */
+  | 'harvestAndRestart'
+  /** Keep the evidence and stop restarting: this is a crash loop. */
+  | 'harvestAndStop'
+  /** The game is down and the policy says only to report it. */
+  | 'refuse';
+
+/** How far back a crash still counts towards the loop test. */
+export const CRASH_WINDOW_MS = 10 * 60 * 1000;
+/** Crashes inside the window that end the restarting. The third crash stops. */
+export const CRASH_LIMIT = 3;
+
+export function readPolicy(): SupervisorPolicy {
+  const raw = process.env.SUNRISE_MCP_SUPERVISOR;
+  if (raw === 'report' || raw === 'off' || raw === 'restart') return raw;
+  // The default restarts, because "any AI" includes one that will not notice a refusal and act on it.
+  return 'restart';
+}
+
+export function decideSupervisorAction(
+  observation: SupervisorObservation,
+  policy: SupervisorPolicy,
+): SupervisorAction {
+  if (policy === 'off') return 'proceed';
+  if (observation.gameAlive) return 'proceed';
+  if (policy === 'report') return 'refuse';
+
+  const recent = observation.crashes.filter((crash) => observation.now - crash.at <= CRASH_WINDOW_MS);
+  // The crash about to be recorded is the one we are handling, so it counts.
+  return recent.length + 1 >= CRASH_LIMIT ? 'harvestAndStop' : 'harvestAndRestart';
+}
+
+/** The effects a harvest performs, injected so their order can be asserted. */
+export interface HarvestIo {
+  copyLog(harvestDir: string): Promise<void>;
+  copyOldLog(harvestDir: string): Promise<void>;
+  writeMeta(harvestDir: string, meta: unknown): Promise<void>;
+  restart(): Promise<void>;
+}
+
+export interface HarvestPlan {
+  harvestDir: string;
+  /** True only for the first harvest of a session: sunrise.log.old still holds the life before it. */
+  includeOld: boolean;
+  meta: unknown;
+}
+
+/**
+ * Keeps the evidence, and only then starts the game again.
+ *
+ * The order is the whole function. open_log_file (log.cpp:116) does
+ * MoveFileExW(sunrise.log, sunrise.log.old, MOVEFILE_REPLACE_EXISTING) before the new life writes
+ * its first line, and it keeps exactly one previous file -- so a restart performed before the
+ * harvest overwrites the previous crash with the current one, and at the second crash of a night
+ * the first has been destroyed. It cannot be recovered afterwards, which is why a failed harvest
+ * rejects rather than restarting anyway: a game that is down stays down and says so, and that is
+ * recoverable.
+ */
+export async function harvestThenRestart(io: HarvestIo, plan: HarvestPlan): Promise<void> {
+  await io.copyLog(plan.harvestDir);
+  if (plan.includeOld) await io.copyOldLog(plan.harvestDir);
+  await io.writeMeta(plan.harvestDir, plan.meta);
+  await io.restart();
+}
