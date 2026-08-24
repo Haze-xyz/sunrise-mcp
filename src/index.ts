@@ -680,9 +680,24 @@ function withEndurance<A extends Record<string, unknown>>(
     if (PREFLIGHT_TOOLS.has(name)) {
       supervisorReport = await serializeStateWrite(() => runPreflight(paths, name));
       if (supervisorReport !== null && supervisorReport.blocked === true) {
-        await appendCall(paths, { ts: startedAt, tool: name, args, status: 'blocked', ms: Date.now() - startedAt });
+        // Captured, not discarded (finding I1): a journal that cannot be written must say so here
+        // too, not only on the non-blocked path below -- a blocked call is exactly the moment the
+        // crash-loop breaker's own bookkeeping matters most.
+        const callWrite = await appendCall(paths, { ts: startedAt, tool: name, args, status: 'blocked', ms: Date.now() - startedAt });
         return {
-          content: [{ type: 'text', text: JSON.stringify({ stage: 'supervisor', status: 'failed', supervisor: supervisorReport }, null, 2) }],
+          content: [{
+            type: 'text',
+            text: JSON.stringify(
+              {
+                stage: 'supervisor',
+                status: 'failed',
+                supervisor: supervisorReport,
+                ...(callWrite.status !== 'ok' ? { journal: callWrite } : {}),
+              },
+              null,
+              2,
+            ),
+          }],
           isError: true,
         };
       }
@@ -711,7 +726,7 @@ function withEndurance<A extends Record<string, unknown>>(
     // journal directory that turned unwritable partway through a night was invisible to all seven
     // wrapped tools -- calls, cursor and crash records all lost with no signal, and the loop breaker
     // silently disabled along with them. Reported in extras.journal below, same as the blocked path
-    // just above already does with its own appendCall.
+    // just above now does with its own appendCall.
     const callWrite = await appendCall(paths, {
       ts: startedAt,
       tool: name,
@@ -1520,10 +1535,16 @@ server.registerTool(
           });
         }
         const paths = journalPaths();
-        const state = await readState(paths);
-        await writeState(paths, {
-          ...state,
-          lastGameEnter: { args: character !== undefined ? { character } : {}, at: Date.now() },
+        // On the same queue as every other state.json read-modify-write cycle (finding I2): without
+        // it, this write can race the supervisor's own crash append, and the loser silently
+        // discards whatever the winner just wrote -- lastGameEnter is the one fact a crash reply
+        // reads back, so losing it here is exactly how that reply ends up wrong.
+        const stateWrite = await serializeStateWrite(async () => {
+          const current = await readState(paths);
+          return writeState(paths, {
+            ...current,
+            lastGameEnter: { args: character !== undefined ? { character } : {}, at: Date.now() },
+          });
         });
         return textResult({
           status: 'ok',
@@ -1532,20 +1553,26 @@ server.registerTool(
           character: verdict.character,
           ...settingsReport(),
           message: verdict.message,
+          // Captured, not discarded (finding I1): a swallowed write here is the failure that later
+          // makes a crash reply claim "nothing had entered the world yet" when something plainly had.
+          ...(stateWrite.status !== 'ok' ? { journal: stateWrite } : {}),
         });
       }
 
       const paths = journalPaths();
-      const state = await readState(paths);
-      await writeState(paths, {
-        ...state,
-        lastGameEnter: { args: character !== undefined ? { character } : {}, at: Date.now() },
+      const stateWrite = await serializeStateWrite(async () => {
+        const current = await readState(paths);
+        return writeState(paths, {
+          ...current,
+          lastGameEnter: { args: character !== undefined ? { character } : {}, at: Date.now() },
+        });
       });
       return textResult({
         status: 'ok',
         route: pressRoute,
         ...pressWindowReport(press),
         message: 'The game reached the character-selection screen.',
+        ...(stateWrite.status !== 'ok' ? { journal: stateWrite } : {}),
       });
     } catch (err) {
       const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
@@ -1663,8 +1690,13 @@ server.registerTool(
     // exactly the failure that matters most.
     let stateWrite: JournalWrite | null = null;
     if (kind === 'goal') {
-      const state = await readState(paths);
-      stateWrite = await writeState(paths, { ...state, goal: text });
+      // On the same queue as every other state.json read-modify-write cycle (finding I2): without
+      // it, this can race the supervisor's own crash append, and whichever write lands second wins
+      // -- discarding either the goal just set here or the crash record the supervisor just wrote.
+      stateWrite = await serializeStateWrite(async () => {
+        const state = await readState(paths);
+        return writeState(paths, { ...state, goal: text });
+      });
     }
     return textResult({
       journal: write,
