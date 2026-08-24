@@ -71,6 +71,7 @@ import { resolveForkDir } from './sync.js';
 import { buildSolution } from './build.js';
 import { deployDll } from './deploy.js';
 import { appendNote, buildResume, journalPaths, readNotes, readState, writeState } from './journal.js';
+import type { JournalWrite } from './journal.js';
 
 const endpoint = new SunriseEndpointClient();
 
@@ -1238,11 +1239,20 @@ server.registerTool(
     const paths = journalPaths();
     const note = { ts: Date.now(), kind: kind ?? ('finding' as const), text };
     const write = await appendNote(paths, note);
+    // A goal is the one note a resume opens with, so "the note landed" is not the whole answer: if
+    // state.json refused the write, the goal is not durable, and reporting a plain ok would hide
+    // exactly the failure that matters most.
+    let stateWrite: JournalWrite | null = null;
     if (kind === 'goal') {
       const state = await readState(paths);
-      await writeState(paths, { ...state, goal: text });
+      stateWrite = await writeState(paths, { ...state, goal: text });
     }
-    return textResult({ journal: write, note, dir: path.win32.normalize(paths.dir) });
+    return textResult({
+      journal: write,
+      ...(stateWrite !== null ? { state: stateWrite } : {}),
+      note,
+      dir: path.win32.normalize(paths.dir),
+    });
   },
 );
 

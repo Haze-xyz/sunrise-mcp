@@ -87,16 +87,41 @@ function truncate(value: string, limit: number): string {
   return value.length <= limit ? value : `${value.slice(0, limit)}...[truncated ${value.length - limit} chars]`;
 }
 
+function isCrashRecord(value: unknown): value is CrashRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.at === 'number' &&
+    Number.isFinite(record.at) &&
+    typeof record.harvestDir === 'string'
+  );
+}
+
+function isGameEnter(value: unknown): value is { args: Record<string, unknown>; at: number } {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (typeof record.at !== 'number' || !Number.isFinite(record.at)) return false;
+  return typeof record.args === 'object' && record.args !== null && !Array.isArray(record.args);
+}
+
 export async function readState(paths: JournalPaths): Promise<JournalState> {
   try {
     const parsed: unknown = JSON.parse(await readFile(paths.state, 'utf8'));
-    if (typeof parsed !== 'object' || parsed === null) return { ...EMPTY_STATE };
-    const record = parsed as Partial<JournalState>;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { ...EMPTY_STATE };
+    const record = parsed as Record<string, unknown>;
+    // Every field is checked against its declared type, not merely against "the file held an
+    // object". A state.json half-written by a hard kill otherwise reaches buildResume intact and
+    // fails quietly instead of loudly. Both measured on the unchecked version: `crashes: ["x"]`
+    // made `lastCrash?.at` evaluate to String.prototype.at -- optional chaining only short-circuits
+    // on null/undefined, and a string has an `.at` -- which is a function, which JSON.stringify
+    // drops, so the lastCrashAt key vanished from the answer rather than reading null. And a
+    // non-numeric `at` made minutesSinceLastEnter NaN, which serialises to null and reads as
+    // "never entered the world". Both look like ordinary output.
     return {
-      lastGameEnter: record.lastGameEnter ?? null,
-      crashes: Array.isArray(record.crashes) ? record.crashes : [],
-      logCursor: record.logCursor ?? null,
-      goal: record.goal ?? null,
+      lastGameEnter: isGameEnter(record.lastGameEnter) ? record.lastGameEnter : null,
+      crashes: Array.isArray(record.crashes) ? record.crashes.filter(isCrashRecord) : [],
+      logCursor: typeof record.logCursor === 'string' ? record.logCursor : null,
+      goal: typeof record.goal === 'string' ? record.goal : null,
     };
   } catch {
     // A journal that has never been written, or one that was corrupted by a hard kill mid-write,

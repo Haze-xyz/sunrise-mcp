@@ -273,6 +273,44 @@ async function main() {
     await cleanup();
   });
 
+  await test('a state file with wrongly-typed innards reads as empty, not as garbage', async () => {
+    const { paths, cleanup } = await tempJournal();
+    await writeFile(
+      paths.state,
+      JSON.stringify({
+        lastGameEnter: { args: {}, at: 'bogus' },
+        crashes: ['not-an-object', { at: 5, harvestDir: 'crash-001' }],
+        logCursor: 42,
+        goal: 5,
+      }),
+      'utf8',
+    );
+    const state = await readState(paths);
+    assert.equal(state.lastGameEnter, null, 'a non-numeric at is not a game enter');
+    assert.deepEqual(state.crashes, [{ at: 5, harvestDir: 'crash-001' }], 'the bad element goes, the good one stays');
+    assert.equal(state.logCursor, null);
+    assert.equal(state.goal, null);
+    await cleanup();
+  });
+
+  await test('a resume built from a corrupt state carries no NaN and loses no key', async () => {
+    // Measured on the unchecked version: crashes:["x"] made lastCrash?.at evaluate to
+    // String.prototype.at -- a function, which JSON.stringify silently drops, so lastCrashAt
+    // disappeared from the answer instead of reading null; and a non-numeric at made
+    // minutesSinceLastEnter NaN, which serialises to null and reads as "never entered".
+    const { paths, cleanup } = await tempJournal();
+    await writeFile(
+      paths.state,
+      JSON.stringify({ lastGameEnter: { args: {}, at: 'bogus' }, crashes: ['not-an-object'] }),
+      'utf8',
+    );
+    const wire = JSON.parse(JSON.stringify(buildResume(await readState(paths), [], 1_000)));
+    assert.ok('lastCrashAt' in wire, 'lastCrashAt must survive JSON.stringify');
+    assert.equal(wire.lastCrashAt, null);
+    assert.equal(wire.minutesSinceLastEnter, null);
+    await cleanup();
+  });
+
   await test('a resume block is small, and leads with the goal and the findings', () => {
     const notes = [
       { ts: 1, kind: 'goal', text: 'find the foreground-lock flag' },
