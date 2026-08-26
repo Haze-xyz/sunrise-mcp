@@ -28,11 +28,11 @@ capabilities layer.
 - `src/` — the base MCP server: `endpoint.ts` (the wire client), `game.ts` / `tasklist.ts` (Windows
   process/log helpers), `keys.ts` / `game-enter-decision.ts` / `press-record.ts` /
   `character.ts` / `serialize.ts` (the `game_enter` machinery), `index.ts` (wires all of it into
-  six MCP tools and registers the capability layer).
+  twelve MCP tools and registers the capability layer).
 - `src/capabilities/` — the plugin layer: `contract.ts` (the `Capability`/`CapabilityContext`
   types), `mem.ts` (the `mem.*` façade), `context.ts` (`buildContext`, assembling the real
   context), `register.ts` (the loader), `index.ts` (the barrel — one array every capability is
-  added to), and one file per capability (`struct-read.ts` today).
+  added to), and one file per capability (`struct-read.ts`, `mem-changed-all.ts`, `mem-read-range.ts` today).
 - `scripts/` — smoke tests (`.mjs`, run with plain `node`) and the PowerShell helpers `game_enter`
   shells out to.
 - `dist/` — build output. Never edit by hand; `npm run build` regenerates it.

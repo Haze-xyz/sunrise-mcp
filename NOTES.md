@@ -1,7 +1,7 @@
 Deep reference and measurement log, moved out of the README to keep the front door clean. This is
 the hard-won detail behind the tools.
 
-## Console primitives beyond the six base tools (`input.*`, `mem.*`, `bootflow.character_step`)
+## Console primitives beyond the base tools (`input.*`, `mem.*`, `bootflow.character_step`)
 
 `console_describe` returns every entry with its help text and bounds, and is the list to trust.
 What follows is what the help strings have no room for and an operator needs first.
@@ -946,7 +946,7 @@ makes this diagnosable now instead of looking like a timeout.
 - `src/serialize.ts` — `createSerializer`, the one-at-a-time call queue `game_enter` runs inside so
   two concurrent invocations cannot both observe "not pressed yet" and both press. Pure, no imports,
   tested by table in `scripts/game-enter-decision-smoke.mjs`.
-- `src/index.ts` — the MCP server: six base tools over stdio, wiring `endpoint.ts`, `game.ts`,
+- `src/index.ts` — the MCP server: twelve base tools over stdio, wiring `endpoint.ts`, `game.ts`,
   `keys.ts`, `tasklist.ts`, `game-enter-decision.ts`, `press-record.ts` and `serialize.ts` together,
   plus `registerCapabilities(server, buildContext(endpoint), CAPABILITIES)` to add the plugin layer.
 - `src/capabilities/contract.ts` — the `Capability`, `CapabilityContext`, `SunriseConsole`,

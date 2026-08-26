@@ -9,9 +9,11 @@ Two things it's for, in priority order:
 2. **Control** — get the game into the world (past the title screen, optionally as a named
    character) and drive input once it's in.
 
-It exposes seven base MCP tools — six over the console endpoint, plus `install_check`, which
-touches nothing and answers why the other six are failing — and an extensible **capabilities**
-layer for composing them into richer tools without touching the game's C++ at all.
+It exposes twelve base MCP tools — two of them (`console_run`, `console_describe`) talk to the
+console endpoint, `install_check` touches nothing and answers why the others are failing, and the
+rest work through the game process, its log, its settings file, its build, or the on-disk journal —
+plus an extensible **capabilities** layer for composing them into richer tools without touching the
+game's C++ at all.
 
 ## From nothing to a game that answers
 
@@ -25,9 +27,12 @@ git clone <sunrise-mcp> && cd sunrise-mcp && npm install && npm run build
 #    34 of upstream's it changes, applied as one squashed change. Nothing is committed.
 node scripts/overlay-apply.mjs --repo <your Sunrise checkout>
 
-# 3. build the DLL and drop it next to destiny2.exe
+# 3. build the DLL, and copy it into bin\x64 -- NOT next to destiny2.exe. The game root is
+#    where the exe lives; the loader takes steam_api64.dll from bin\x64, and a DLL left at
+#    the root is simply never loaded. `dll_deploy` puts it in the right place for you.
+cd <your Sunrise checkout>
 msbuild Sunrise.sln /m /v:normal /p:Configuration=Release /p:Platform=x64
-#    -> build/x64/Release/steam_api64.dll
+#    build\x64\Release\steam_api64.dll  ->  <game dir>\bin\x64\steam_api64.dll
 
 # 4. turn the listener on. It ships OFF, and this is the step everyone misses:
 #    <game dir>\bin\x64\Sunrise\settings.json  ->  server > console_endpoint > "enabled": true
@@ -89,8 +94,13 @@ The two answers worth knowing in advance:
   connection while nothing in the game is wrong. Set `"enabled": true` under `server` >
   `console_endpoint` in `<game dir>\bin\x64\Sunrise\settings.json` and restart the game.
 - **`notForkBuild`** — the settings carry neither `console_endpoint` nor
-  `hold_character_select`, so the DLL is not built from the fork and nothing this server drives
-  exists in it. Adding the keys by hand changes nothing; no code reads them.
+  `hold_character_select`, so no fork DLL has run in this install and nothing this server drives
+  exists in it. Adding the keys by hand changes nothing; no code reads them. **Two different
+  mistakes land here and the verdict cannot tell them apart**: the DLL really is a stock build, or
+  it is the right build in the wrong folder. The loader takes `steam_api64.dll` from
+  `<game dir>\bin\x64`, so one left beside `destiny2.exe` at the game root is never loaded, Sunrise
+  never writes its keys, and the settings look exactly like a stock install's. Check
+  `<game dir>\bin\x64\steam_api64.dll` before rebuilding anything.
 
 `install_check` also reports the settings `version` field. The game migrates that file on its own
 (upstream's `settings_upgrade.h`, bundled default 6 → 8), so a file written by a newer build is not
@@ -224,6 +234,26 @@ precision, `i64` as a decimal string, everything else as a number.
 
 Verified live: at the running image base, this decodes the PE header's `e_magic` as `0x5A4D`
 ("MZ") — see `scripts/struct-read-live.mjs`.
+
+### `mem_changed_all` and `mem_read_range` — one call instead of a round trip per row
+
+Both exist for the same reason, and it is worth knowing before you reach for `console_run`
+directly. A console `Result` carries `kRowCapacity` = 16 rows and nothing more, so
+`kMaxReadBytes` is `16 × 16` and `mem.read` answers **256 bytes a call whatever is in them**; a
+page-level `mem.changed` spends nine of those rows on counts, leaving **seven addresses a call**.
+Neither number is a mistake — naming the eight lowest changed pages and stopping would answer
+nothing, because they are the same eight every time — but paying a round trip per seven is a cost
+this layer can absorb without touching a core constant everything else depends on.
+
+| Tool | Input | Output |
+|---|---|---|
+| `mem_changed_all` | `maxAddress?: string` | The whole `mem.changed` list in one call: `{ mode, changed, listed, returned, stoppedEarly, addresses }`. Photograph first with `console_run mem.watch <address>` — this compares, it does not photograph. The list is sorted, so `maxAddress` stops paging once past the range you care about. |
+| `mem_read_range` | `address: string`, `length: number`, `joinDistance?: number` | `{ address, length, allZero, zeroBytes, runs }` — only the islands of non-zero bytes, each with its own address. An all-zero page comes back as `allZero: true` with no rows. |
+
+Measured against the live game on 2026-08-26: a 4096-byte page that cost sixteen `mem.read` calls
+and 256 hexdump rows by hand came back in **one** call as 4095 zero bytes and a single byte at
+`+0xD8B`; and a 99-page comparison restricted to `.data` returned its 58 addresses in **one** call,
+spending nine console round trips internally where paging by hand takes fifteen.
 
 ### Add a capability
 
