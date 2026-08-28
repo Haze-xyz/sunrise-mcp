@@ -20,7 +20,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { decideInstallVerdict, describeInstallVerdict } from '../dist/install-verdict.js';
+import { decideInstallVerdict, describeBootSettings, describeInstallVerdict } from '../dist/install-verdict.js';
 import { readSettings } from '../dist/install.js';
 
 const results = [];
@@ -176,6 +176,37 @@ async function main() {
     const findings = readSettings('this is not a settings file');
     assert.equal(findings.understood, false);
     assert.equal(decideInstallVerdict({ ...healthy, settingsUnderstood: false }), 'settingsUnreadable');
+  });
+
+  // describeBootSettings. The point of these is that the note is about the value that is *there*:
+  // the same key gets opposite advice, and the unread case gets neither.
+  await test('a settings note is written for the value in hand, not for the key', () => {
+    const held = describeBootSettings({ endpointEnabled: true, endpointPort: 30975, holdCharacterSelect: true }).join('\n');
+    const free = describeBootSettings({ endpointEnabled: true, endpointPort: 30975, holdCharacterSelect: false }).join('\n');
+    assert.ok(held.includes('waits for a pick'));
+    assert.ok(held.includes('game_enter { character }'));
+    // The cost belongs to the false note and nowhere else: it is what an agent reading `false` has
+    // to know before it launches and reports an empty world as a success.
+    assert.ok(free.includes('no player object'));
+    assert.ok(free.includes('no ship'));
+    assert.ok(!held.includes('no player object'));
+  });
+
+  await test('the endpoint note names the port when it is on, and never calls unread off', () => {
+    const on = describeBootSettings({ endpointEnabled: true, endpointPort: 30975, holdCharacterSelect: true }).join('\n');
+    const off = describeBootSettings({ endpointEnabled: false, endpointPort: 30975, holdCharacterSelect: true }).join('\n');
+    const unknown = describeBootSettings({ endpointEnabled: null, endpointPort: null, holdCharacterSelect: null }).join('\n');
+    assert.ok(on.includes('port 30975'));
+    assert.ok(off.includes('refused connection'));
+    assert.ok(unknown.includes('not read'));
+    assert.ok(!unknown.includes('refused connection'));
+  });
+
+  await test('every set of notes says the values are boot-time', () => {
+    for (const hold of [true, false, null]) {
+      const notes = describeBootSettings({ endpointEnabled: null, endpointPort: null, holdCharacterSelect: hold });
+      assert.ok(notes[0].includes('restarted'), `header missing for hold=${hold}`);
+    }
   });
 
   const failed = results.filter((r) => !r.ok);

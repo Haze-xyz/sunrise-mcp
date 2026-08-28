@@ -16,6 +16,7 @@ import path from 'node:path';
 
 import {
   decideInstallVerdict,
+  describeBootSettings,
   describeInstallVerdict,
   type InstallFacts,
   type InstallVerdict,
@@ -45,6 +46,9 @@ export interface InstallReport {
     endpointEnabled: boolean | null;
     endpointPort: number | null;
     holdCharacterSelect: boolean | null;
+    /** What the two boot settings above do, given the values that are there. See
+     *  `describeBootSettings`: the values alone told a reader nothing about what to do next. */
+    notes: string[];
   };
 }
 
@@ -197,6 +201,7 @@ export async function inspectInstall(env: NodeJS.ProcessEnv = process.env): Prom
       endpointEnabled: findings.endpointEnabled,
       endpointPort: findings.endpointPort,
       holdCharacterSelect: findings.holdCharacterSelect,
+      notes: describeBootSettings(findings),
     },
   };
 }

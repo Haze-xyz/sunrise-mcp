@@ -36,6 +36,7 @@ import {
   decideCharacterVerdict,
   describeRoster,
   disableCharacterSelectHold,
+  HANDS_FREE_ENTRY_WARNING,
   normalizeCharacterRequest,
   parseRoster,
   parseSelectAnswer,
@@ -1163,6 +1164,11 @@ server.registerTool(
       'waiting without pressing again rather than risking a second keystroke into whatever the game is currently ' +
       'showing; if it cannot tell whether the game has already been pressed (an ambiguous or undeterminable ' +
       'state), it declines to press at all. ' +
+      'One thing to know before calling this with a character at all, because it is the whole trade of the ' +
+      'hands-free route and it does not look like a failure: entering without the character screen leaves the ' +
+      'client with no player object -- no ship in orbit, and a destination launched from there loads correctly ' +
+      'with nobody in it. Every ok response on that path repeats it in a warning field. Console, memory and wire ' +
+      'work fine; anything needing a body does not. ' +
       'With a character named, three more things happen and all three are reported. Before launching, it makes ' +
       `sure the game's own settings file has client.${HOLD_SETTING_KEY} set to false, because while that is true ` +
       'the client parks on the selection screen whatever character is chosen, and the flag is read once at boot by ' +
@@ -1555,6 +1561,10 @@ server.registerTool(
           ...pressWindowReport(press),
           character: verdict.character,
           ...settingsReport(),
+          // Every success on this path is a hands-free entry -- the flag has to be off for the pick
+          // to reach the client -- so this is unconditional, unlike settingsReport() above, which
+          // only speaks on the one call that wrote the file. See HANDS_FREE_ENTRY_WARNING.
+          warning: HANDS_FREE_ENTRY_WARNING,
           message: verdict.message,
           // Captured, not discarded (finding I1): a swallowed write here is the failure that later
           // makes a crash reply claim "nothing had entered the world yet" when something plainly had.
@@ -1604,7 +1614,13 @@ server.registerTool(
       'character.* exists in it); endpointDisabled ("console_endpoint" is there with "enabled": false, which is ' +
       'what the fork ships by default -- every tool here then fails with a refused connection and nothing in the ' +
       'game is wrong). The report also carries the settings `version` field, which the game migrates on its own ' +
-      'and which is how a settings file written by a newer build is told from a broken one.',
+      'and which is how a settings file written by a newer build is told from a broken one. ' +
+      'The `settings` block is not bare values: a `notes` line per boot setting says what the value ' +
+      'that is actually there does to your next call, so read them before launching. The one that ' +
+      'changes what you get is `client.hold_character_select`, which any earlier hands-free entry ' +
+      'leaves false: false means no character screen, and no player object either -- orbit with no ' +
+      'ship, and a destination that loads with nobody in it. Both boot settings are read once at ' +
+      'startup, so changing either means restarting the game, not sending a console command.',
   },
   async (): Promise<CallToolResult> => textResult(await inspectInstall()),
 );

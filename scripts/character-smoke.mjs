@@ -43,6 +43,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import {
   CHARACTER_CLASSES,
   CHARACTER_ENTERED_MARKER,
+  HANDS_FREE_ENTRY_WARNING,
   HOLD_HOOK_MARKER,
   HOLD_SETTING_KEY,
   SIGN_IN_MARKER,
@@ -749,6 +750,15 @@ async function main() {
     });
 
     // -----------------------------------------------------------------------
+    await test('the hands-free warning names the flag, the cost, and the way back', () => {
+      // Not a tautology over a constant: these four are what an agent has to be able to act on --
+      // which key, what is missing, that a destination looks fine anyway, and what to do instead.
+      assert.ok(HANDS_FREE_ENTRY_WARNING.includes(HOLD_SETTING_KEY));
+      assert.ok(HANDS_FREE_ENTRY_WARNING.includes('no player object'));
+      assert.match(HANDS_FREE_ENTRY_WARNING, /nobody in it/);
+      assert.match(HANDS_FREE_ENTRY_WARNING, /game_kill/);
+    });
+
     // What the MCP surface actually publishes, read the way an agent reads it.
     // -----------------------------------------------------------------------
 
@@ -782,6 +792,11 @@ async function main() {
         assert.match(enter.description, /before the game signs in/i);
         assert.match(enter.description, /characterVerify/);
         assert.match(enter.description, new RegExp(HOLD_SETTING_KEY));
+        // The trade of the route, in the description an agent reads *before* it calls. Left out,
+        // the only place it appeared was the response of the one call that rewrote the settings
+        // file, and every call after that returned a bare ok.
+        assert.match(enter.description, /no player object/i);
+        assert.match(enter.description, /warning/);
 
         const run = tools.find((tool) => tool.name === 'console_run');
         assert.ok(run.description.includes('character.select'), 'console_run must name the console entry and its syntax');

@@ -139,3 +139,90 @@ export function describeInstallVerdict(verdict: InstallVerdict, facts: InstallFa
     }
   }
 }
+
+/** The settings values a report carries beyond the verdict. `null` is "not read", never "false". */
+export interface BootSettingsFacts {
+  /** `server.console_endpoint.enabled`. */
+  endpointEnabled: boolean | null;
+  /** `server.console_endpoint.port`. */
+  endpointPort: number | null;
+  /** `client.hold_character_select`. */
+  holdCharacterSelect: boolean | null;
+}
+
+/**
+ * Says what the boot settings in hand actually do, one line each.
+ *
+ * It exists because of the second piece of outside feedback this server got: *"one thing that is not
+ * clear to my agent are boot settings"*. The settings block of a report is bare values --
+ * `holdCharacterSelect: true` -- and an agent reading that has nothing to decide with: it cannot
+ * tell that the flag is the difference between a launch that parks on a screen forever and one that
+ * enters by itself, nor that the second costs it the player object. So each value gets a sentence
+ * about the value that is there, not a manual for the key.
+ *
+ * Both keys are read once, at startup, by code the console cannot reach -- the hold hook installs in
+ * `bootflow_hook_lifecycle.cpp::install()` and the listener is created in `server_runtime.cpp` --
+ * which is why the header line says a change needs a restart rather than a command.
+ *
+ * @param settings The values install.ts read, with `null` for anything it could not read.
+ * @returns One header line plus one line per setting, in the order a caller meets them.
+ */
+export function describeBootSettings(settings: BootSettingsFacts): string[] {
+  const notes: string[] = [
+    'Boot settings: both are read once at startup by code the console cannot reach, so changing ' +
+      'either needs the game restarted (game_kill, then game_enter). No console command moves them.',
+  ];
+
+  if (settings.endpointEnabled === true) {
+    notes.push(
+      '"server.console_endpoint": enabled, ' +
+        (settings.endpointPort === null ? 'port not read' : `port ${settings.endpointPort}`) +
+        ' -- the socket console_run, console_describe and every mem.* and character.* tool talk to. ' +
+        'It serves one client at a time, and a client holds it for the life of its process, so a ' +
+        'second MCP server pointed at this game is refused rather than queued.',
+    );
+  } else if (settings.endpointEnabled === false) {
+    notes.push(
+      '"server.console_endpoint": { "enabled": false } -- the listener is never created, so every ' +
+        'tool that talks to the game fails with a refused connection and nothing in the game is wrong.',
+    );
+  } else {
+    notes.push(
+      '"server.console_endpoint": not read, so whether anything can connect is unknown. That is a ' +
+        'settings file this server could not parse, not a report that the endpoint is off.',
+    );
+  }
+
+  if (settings.holdCharacterSelect === true) {
+    notes.push(
+      '"client.hold_character_select": true -- the client stops at the character-select screen and ' +
+        'waits for a pick, so a launch with nobody choosing parks there for good. It is also the ' +
+        'state a session meant to be played wants: the client\'s own character-select step, actually ' +
+        'run, is what creates the player object (measured 2026-08-19 -- picked by hand, the ship is ' +
+        'in orbit and a destination spawns normally). game_enter { character } rewrites this key to ' +
+        'false before it launches, copies the untouched original aside the first time it ever does so, ' +
+        'and reports the change in its response.',
+    );
+  } else if (settings.holdCharacterSelect === false) {
+    notes.push(
+      '"client.hold_character_select": false -- there is no character screen: the sign-in step ' +
+        'selects on its own, which is what lets game_enter { character } reach the world with no ' +
+        'hands. What it costs, measured 2026-08-19 and 2026-08-21: the client arrives in orbit with ' +
+        'no player object -- no ship, player.position present:false -- and a destination launched ' +
+        'from there loads correctly, with nobody in it: a black screen and no error anywhere. So if ' +
+        'what you are testing is a destination, this value is the one that guarantees you cannot ' +
+        'see it, and it will not look like a failure. Nothing restores the key: set it back to true, ' +
+        'restart, and make the pick on the real screen (game_enter with no character stops there, ' +
+        'and input.hold drives that screen) before going anywhere.',
+    );
+  } else {
+    notes.push(
+      '"client.hold_character_select": not read. The game\'s own default is true ' +
+        '(core/settings/client/definition.h), which is the parks-on-the-screen behaviour. ' +
+        'game_enter { character } refuses rather than adding an absent key, so add it under ' +
+        '"client" by hand if a hands-free entry is what you want.',
+    );
+  }
+
+  return notes;
+}

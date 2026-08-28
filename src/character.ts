@@ -72,6 +72,28 @@ export const HOLD_HOOK_MARKER = 'ev=bootflow stage=character_select result=ok';
 export const HOLD_SETTING_KEY = 'hold_character_select';
 
 /**
+ * What a successful hands-free entry did *not* give the caller, said in the response of every one of
+ * them.
+ *
+ * Unconditional on the character path, and that is the point. The flag has to be off for a pick to
+ * reach the client, so every `game_enter { character }` that returns ok entered by this route -- but
+ * the file is only written once, so `settings` appears in the first response and never again, and
+ * from the second call on the response read `status: ok`, `entered: warlock` and nothing else. An
+ * agent reading that goes to a destination, gets a world that loads with no error and nobody in it,
+ * and looks for the fault in the destination. The cost of the route belongs in the answer the route
+ * returns, not in a file the caller has no reason to open.
+ */
+export const HANDS_FREE_ENTRY_WARNING =
+  `This entry skipped the client's own character-select screen, which is what client.${HOLD_SETTING_KEY}` +
+  ': false buys and what it costs. Measured 2026-08-19 and 2026-08-21: entering by this route leaves ' +
+  'the client with no player object -- no ship in orbit, player.position present:false, keepalive ' +
+  'spawn_state=0 -- and a destination launched from here loads correctly, with nobody in it: a black ' +
+  'screen and no error anywhere. Everything that does not need a body still works (console.*, mem.*, ' +
+  'the wire). For anything that does -- moving, seeing a destination, testing the world -- call ' +
+  `game_kill, set client.${HOLD_SETTING_KEY} back to true, and make the pick on the real screen ` +
+  '(game_enter with no character stops there, and input.hold drives it).';
+
+/**
  * A `character` argument that named something. Split from the union below so every function that
  * only ever runs *after* the argument was accepted can say so in its signature, rather than
  * re-proving it or reaching for a token the invalid case does not have.
