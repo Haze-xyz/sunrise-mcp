@@ -266,8 +266,10 @@ export const SIGN_IN_MARKER = "Entering state 'bootflow:bap_signin'";
  * Whether a `character.list` answer is the game saying "the pick can be made now".
  *
  * An empty roster this early in a boot is not an account that owns nobody, it is a roster that has
- * not been built yet: the characters are authored from settings during startup, and the console
- * endpoint binds well before that finishes (`console_endpoint stage=listen` is at t=125ms). Treating
+ * not been built yet: before Sunrise 0.5 the console endpoint bound at t=125ms, before the characters
+ * were authored. On 0.5.1 the order is reversed (account authored at t=187, endpoint at t=437,
+ * measured 2026-09-24), so the first answer is usually the full roster; the poll stays because it
+ * costs nothing when it is not needed. Treating
  * the first answer that arrives as final -- which is what polling only on a thrown error amounts to
  * -- fails the whole call on a game that was merely a few hundred milliseconds early.
  *

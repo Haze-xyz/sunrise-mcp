@@ -121,28 +121,114 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Reads mcp.json with the rules the DLL applies (`src/mcp/settings/mcp_settings_parse.cpp`): a
- * leading BOM is fine, the top level is an object, unknown keys are skipped, `endpoint.enabled` must
- * be a boolean and `endpoint.port` an integer from 1 to 65535. Anything else and the DLL keeps its
- * defaults, so this reports the endpoint off -- never "on" from a file the game ignored.
+ * Reads mcp.json exactly as the DLL does: a line-for-line port of the reader in
+ * `src/mcp/settings/mcp_settings_parse.cpp` on the mcp branch, so the two cannot disagree. That is
+ * why this is not `JSON.parse`, which accepts files the DLL rejects (`"port": 30975.0`, a `null`)
+ * and rejects files the DLL accepts (`"port": 0080`). A leading BOM is fine, the top level must be
+ * an object, unknown keys are skipped (nesting over 16 deep is refused), keys are compared as
+ * written with escapes undecoded, `endpoint.enabled` must be `true`/`false` and `endpoint.port` a
+ * plain integer from 1 to 65535. Anything else and the DLL keeps its defaults, endpoint off, so this
+ * reports the endpoint off -- never "on" from a file the game ignored.
  */
 export function readMcpConfig(text: string): McpConfigFindings {
   const rejected: McpConfigFindings = { valid: false, endpointEnabled: false, endpointPort: DEFAULT_ENDPOINT_PORT };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.startsWith('\uFEFF') ? text.slice(1) : text);
-  } catch {
-    return rejected;
-  }
-  if (!isRecord(parsed)) return rejected;
-  const endpoint = parsed['endpoint'];
-  if (endpoint === undefined) return { valid: true, endpointEnabled: false, endpointPort: DEFAULT_ENDPOINT_PORT };
-  if (!isRecord(endpoint)) return rejected;
-  const enabled = endpoint['enabled'] ?? false;
-  const port = endpoint['port'] ?? DEFAULT_ENDPOINT_PORT;
-  if (typeof enabled !== 'boolean') return rejected;
-  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) return rejected;
-  return { valid: true, endpointEnabled: enabled, endpointPort: port };
+  const doc = text.startsWith('\uFEFF') ? text.slice(1) : text;
+  let at = 0;
+  const out = { enabled: false, port: DEFAULT_ENDPOINT_PORT };
+  const take = (c: string): boolean => (doc[at] === c ? (at++, true) : false);
+  const space = (): void => {
+    while (at < doc.length && ' \t\r\n'.includes(doc[at] as string)) at++;
+  };
+  const literal = (word: string): boolean => (doc.startsWith(word, at) ? ((at += word.length), true) : false);
+  const str = (): string | null => {
+    if (!take('"')) return null;
+    const start = at;
+    while (at < doc.length) {
+      const c = doc[at] as string;
+      if (c === '"') return doc.slice(start, at++);
+      if (c.charCodeAt(0) < 0x20) return null;
+      at += c === '\\' ? 2 : 1;
+    }
+    return null;
+  };
+  const bool = (): boolean | null => (literal('true') ? true : literal('false') ? false : null);
+  const integer = (): number | null => {
+    const negative = take('-');
+    const start = at;
+    let value = 0;
+    while (at < doc.length && (doc[at] as string) >= '0' && (doc[at] as string) <= '9') {
+      if (value > 1_000_000) return null;
+      value = value * 10 + (doc.charCodeAt(at) - 48);
+      at++;
+    }
+    if (at === start || doc[at] === '.' || doc[at] === 'e' || doc[at] === 'E') return null;
+    return negative ? -value : value;
+  };
+  const number = (): boolean => {
+    take('-');
+    const start = at;
+    while (at < doc.length && '0123456789.eE+-'.includes(doc[at] as string)) at++;
+    return at !== start;
+  };
+  const object = (member: (key: string) => boolean): boolean => {
+    if (!take('{')) return false;
+    space();
+    if (take('}')) return true;
+    for (;;) {
+      space();
+      const key = str();
+      if (key === null) return false;
+      space();
+      if (!take(':')) return false;
+      space();
+      if (!member(key)) return false;
+      space();
+      if (take('}')) return true;
+      if (!take(',')) return false;
+    }
+  };
+  const skip = (depth: number): boolean => {
+    if (depth > 16 || at >= doc.length) return false;
+    const c = doc[at];
+    if (c === '{') return object(() => skip(depth + 1));
+    if (c === '[') {
+      at++;
+      space();
+      if (take(']')) return true;
+      for (;;) {
+        space();
+        if (!skip(depth + 1)) return false;
+        space();
+        if (take(']')) return true;
+        if (!take(',')) return false;
+      }
+    }
+    if (c === '"') return str() !== null;
+    if (c === 't' || c === 'f') return bool() !== null;
+    if (literal('null')) return true;
+    return number();
+  };
+  const endpoint = (): boolean =>
+    object((key) => {
+      if (key === 'enabled') {
+        const value = bool();
+        if (value === null) return false;
+        out.enabled = value;
+        return true;
+      }
+      if (key === 'port') {
+        const value = integer();
+        if (value === null || value < 1 || value > 65535) return false;
+        out.port = value;
+        return true;
+      }
+      return skip(2);
+    });
+  space();
+  const ok = object((key) => (key === 'endpoint' ? endpoint() : skip(1)));
+  space();
+  if (!ok || at !== doc.length) return rejected;
+  return { valid: true, endpointEnabled: out.enabled, endpointPort: out.port };
 }
 
 /**
@@ -211,6 +297,7 @@ export async function inspectInstall(env: NodeJS.ProcessEnv = process.env): Prom
     mcpConfigPresent,
     mcpConfigValid: config.valid,
     endpointEnabled: config.endpointEnabled,
+    fileSink: sunriseSettings.fileSink,
   };
   const verdict = decideInstallVerdict(facts);
 
@@ -223,7 +310,7 @@ export async function inspectInstall(env: NodeJS.ProcessEnv = process.env): Prom
     settingsPath,
     facts,
     verdict,
-    message: describeInstallVerdict(verdict, facts, { gameDir, dllPath, mcpConfigPath }),
+    message: describeInstallVerdict(verdict, facts, { gameDir, dllPath, mcpConfigPath, settingsPath }),
     settings: {
       version: sunriseSettings.version,
       fileSink: sunriseSettings.fileSink,
@@ -264,18 +351,32 @@ export async function ensureEndpointEnabled(configPath: string): Promise<Endpoin
   let text: string | null = null;
   try {
     text = await readFile(configPath, 'utf8');
-  } catch {
+  } catch (err) {
+    // Only a missing file is "no file". Anything else (no permission, a lock) is a file this call
+    // cannot copy aside, so it must not be replaced either.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     text = null;
   }
   let next: Record<string, unknown> = { endpoint: { enabled: true } };
   let status: EndpointEnableResult['status'] = 'written';
+  let dllAccepted = false;
   if (text !== null) {
     const config = readMcpConfig(text);
     if (config.valid && config.endpointEnabled) {
       return { status: 'alreadyOn', path: configPath, message: `${configPath} already switches the endpoint on.` };
     }
+    let parsed: Record<string, unknown> | null = null;
+    dllAccepted = config.valid;
     if (config.valid) {
-      const parsed = JSON.parse(text.startsWith('\uFEFF') ? text.slice(1) : text) as Record<string, unknown>;
+      try {
+        parsed = asRecord(JSON.parse(text.startsWith('\uFEFF') ? text.slice(1) : text));
+      } catch {
+        // Valid for the DLL but not for JSON.parse (a "port": 0080): the keys cannot be carried
+        // over safely, so the file is replaced and the original kept aside like any other.
+        parsed = null;
+      }
+    }
+    if (parsed !== null) {
       next = { ...parsed, endpoint: { ...(asRecord(parsed['endpoint']) ?? {}), enabled: true } };
       status = 'turnedOn';
     } else {
@@ -294,7 +395,9 @@ export async function ensureEndpointEnabled(configPath: string): Promise<Endpoin
       ? 'did not exist, so it was written'
       : status === 'turnedOn'
         ? 'switched the endpoint off, so "endpoint"."enabled" was set to true and every other key kept'
-        : 'was a file the DLL rejects, so it was replaced';
+        : dllAccepted
+          ? 'switched the endpoint off in a form JSON cannot parse, so its keys could not be carried over and it was replaced'
+          : 'was a file the DLL rejects, so it was replaced';
   return {
     status,
     path: configPath,

@@ -19,9 +19,7 @@ Two purposes, in priority order:
 2. **Control.** Get the game into the world and drive it. Secondary — it rides on the same
    primitives (`input.*`, the log-marker waits) rather than growing its own C++ surface.
 
-See `docs/superpowers/specs/2026-08-21-sunrise-mcp-capabilities-plugin-design.md` (outside this
-repo — it lives with the other SDD workspaces) for the full design rationale behind the
-capabilities layer.
+The README's "Capabilities" section is the design rationale behind the capabilities layer.
 
 ## Repo layout
 

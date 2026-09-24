@@ -55,7 +55,7 @@ msbuild Sunrise.sln /m /v:normal /p:Configuration=Release /p:Platform=x64 /p:Pre
 export SUNRISE_GAME_DIR='E:\Your\Destiny_Sunrise'
 ```
 
-Then ask your MCP client to run `install_check`. It answers `ok`, or names which of five things is
+Then ask your MCP client to run `install_check`. It answers `ok`, or names which of six things is
 wrong, and none of its answers is about the game.
 
 ## What it needs
@@ -97,9 +97,11 @@ failure rather than the configuration problem it is.
   its endpoint is off. Write `{"endpoint":{"enabled":true}}` to `bin\x64\Sunrise\mcp.json` and
   restart the game; `game_enter` does it before launching.
 
-Its `settings.notes` also say when `core.logging.file_sink` is off in Sunrise's `settings.json`.
-Sunrise 0.5.1 rewrites that file with its own default, file sink off, whenever the file's `version`
-is older than the build's, so a log that silently stopped is worth checking there.
+- **`logFileOff`** — everything else is right, but `core.logging.file_sink` is false in Sunrise's
+  `settings.json`, so the game writes no `sunrise.log`, and `game_enter`, `log_read` and `wait_for`
+  read that file. `game_enter` refuses to launch in that state. Sunrise 0.5.1 ships it false and
+  rewrites the file with that default whenever its `version` is older than the build's, so a log
+  that silently stopped is worth checking there.
 
 ## Run it / connect an MCP client
 
@@ -130,7 +132,7 @@ its build, or the on-disk journal:
 |---|---|---|
 | `console_run` | `line: string` | The endpoint's structured response: `status`, `summary`, `rows`. |
 | `console_describe` | — | The full command/variable registry. |
-| `install_check` | — | What this install actually is, before believing any other tool's failure: `ok`, `gameDirNotFound`, `notMcpBuild`, `mcpConfigMissing`, `mcpConfigInvalid`, or `endpointDisabled`. Touches nothing. |
+| `install_check` | — | What this install actually is, before believing any other tool's failure: `ok`, `gameDirNotFound`, `notMcpBuild`, `mcpConfigMissing`, `mcpConfigInvalid`, `endpointDisabled`, or `logFileOff`. Touches nothing. |
 | `game_launch` | — | Starts `destiny2.exe` (killing any existing instance first) and waits for its window. |
 | `game_kill` | — | `taskkill /IM destiny2.exe /F`, then waits for the process to actually leave the process table. Safe to call when the game isn't running. |
 | `log_read` | `lines?: number`, `since?: string`, `filter?: {ev?, level?, channel?, text?}`, `mode?: 'lines' \| 'digest'`, `rareThreshold?: number` | With none of the new arguments, the tail of `sunrise.log` (default 200 lines, capped at 1000), unchanged. `since` (a previous call's `cursor`) reads only what's new and reports `rotated` across a restart. `filter` keeps only matching lines. `mode: "digest"` returns counts instead of lines, with rare events — and every warn/error — quoted verbatim. |
@@ -221,9 +223,7 @@ spending nine console round trips internally where paging by hand takes fifteen.
 4. Write `scripts/<name>-smoke.mjs`: build a fake `ctx` (no game, no MCP framework) and assert
    against the decoded/returned result. Wire it into `npm run test:capabilities`.
 
-That's the whole recipe — **no C++ changes, ever**, for a new capability. The design intent (kept
-in `docs/superpowers/specs/2026-08-21-sunrise-mcp-capabilities-plugin-design.md`, outside this
-repo) is that the C++ side stays a small, frozen set of generic primitives — `mem.*` and the
+That's the whole recipe — **no C++ changes, ever**, for a new capability. The design intent is that the C++ side stays a small, frozen set of generic primitives — `mem.*` and the
 per-frame input drivers — and everything that tracks a fast-moving upstream lives here instead.
 
 ## Development & testing

@@ -31,7 +31,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -324,6 +324,28 @@ async function main() {
       assert.equal(result.status, 'replaced');
       assert.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), { endpoint: { enabled: true } });
       assert.equal(await readFile(mcpConfigBackupPath(configPath), 'utf8'), '{"endpoint":{"enabled":"yes"}');
+    });
+
+    await test('review: an mcp.json that cannot be read is refused, never overwritten without a backup', async () => {
+      const configPath = path.join(dir, 'unreadable.json');
+      await writeFile(configPath, '{"endpoint":{"enabled":false},"mine":1}', 'utf8');
+      await chmod(configPath, 0o000);
+      try {
+        await assert.rejects(() => ensureEndpointEnabled(configPath));
+      } finally {
+        await chmod(configPath, 0o600);
+      }
+      assert.equal(await readFile(configPath, 'utf8'), '{"endpoint":{"enabled":false},"mine":1}', 'nothing may have replaced it');
+    });
+
+    await test('review: a file the DLL reads but JSON.parse does not is still switched on, with a backup', async () => {
+      const configPath = path.join(dir, 'octal-ish.json');
+      const original = '{"endpoint":{"enabled":false,"port":0080}}';
+      await writeFile(configPath, original, 'utf8');
+      const result = await ensureEndpointEnabled(configPath);
+      assert.equal(result.status, 'replaced');
+      assert.equal(JSON.parse(await readFile(configPath, 'utf8')).endpoint.enabled, true);
+      assert.equal(await readFile(mcpConfigBackupPath(configPath), 'utf8'), original);
     });
 
     // -----------------------------------------------------------------------
@@ -678,6 +700,8 @@ async function main() {
         // The one file it writes, named where an agent reads before it calls.
         assert.match(enter.description, /mcp\.json/);
         assert.doesNotMatch(enter.description, /hold_character_select/);
+        // Review I2: it refuses before launching when the game would write no log for it to read.
+        assert.match(enter.description, /file_sink/);
 
         const run = tools.find((tool) => tool.name === 'console_run');
         assert.ok(run.description.includes('character.select'), 'console_run must name the console entry and its syntax');

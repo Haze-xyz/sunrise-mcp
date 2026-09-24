@@ -21,6 +21,7 @@ import {
   getExePath,
   getLogPath,
   getMcpConfigPath,
+  getSettingsPath,
   killGame,
   launchGame,
   readLog,
@@ -65,7 +66,8 @@ import path from 'node:path';
 import { CAPABILITIES } from './capabilities/index.js';
 import { buildContext } from './capabilities/context.js';
 import { registerCapabilities } from './capabilities/register.js';
-import { ensureEndpointEnabled, inspectInstall, resolveGameDirWithSource, type EndpointEnableResult } from './install.js';
+import { ensureEndpointEnabled, inspectInstall, readSettings, resolveGameDirWithSource, type EndpointEnableResult } from './install.js';
+import { describeLogFileOff } from './install-verdict.js';
 import { buildSolution, resolveForkDir } from './build.js';
 import { deployDll } from './deploy.js';
 import {
@@ -81,7 +83,7 @@ import {
   writeState,
 } from './journal.js';
 import type { JournalPaths, JournalWrite } from './journal.js';
-import { copyFile, mkdir, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import type { HarvestIo } from './supervisor.js';
 import { CRASH_LIMIT, CRASH_WINDOW_MS, decideSupervisorAction, harvestThenRestart, readPolicy } from './supervisor.js';
 
@@ -1153,6 +1155,8 @@ server.registerTool(
       'waiting without pressing again rather than risking a second keystroke into whatever the game is currently ' +
       'showing; if it cannot tell whether the game has already been pressed (an ambiguous or undeterminable ' +
       'state), it declines to press at all. ' +
+      'It refuses, launching nothing, when Sunrise\'s settings.json has core.logging.file_sink false, because ' +
+      'every wait it makes reads sunrise.log and the game would write none (0.5.1 ships it false). ' +
       'Before any launch it makes sure bin\\x64\\Sunrise\\mcp.json switches the console endpoint on, because every ' +
       'tool here needs it and the DLL reads that file once at boot; when it has to write the file it says so in a ' +
       'settings object naming the file and a backup of what was there. On Sunrise 0.5.1 a pick made before ' +
@@ -1170,9 +1174,9 @@ server.registerTool(
       'rather than reported as success: called against a game that is already past sign-in, it tells you which ' +
       'character that game actually entered as and, if it is the wrong one, that game_kill followed by this same ' +
       'call is the way to change it. On ' +
-      'failure, the response names which stage it stopped at (launch, titleScreen, keyPress, worldLoad, ambiguous, ' +
-      'or -- only when a character was asked for -- character for a name that is not a class, characterHold for the ' +
-      'settings flag, characterSelect for a pick the game refused or one this tool refused to make because the ' +
+      'failure, the response names which stage it stopped at (logFile for the log file switched off, ' +
+      'endpointSetting for an mcp.json it could not write, launch, titleScreen, keyPress, worldLoad, ambiguous, ' +
+      'or -- only when a character was asked for -- character for a name that is not a class, characterSelect for a pick the game refused or one this tool refused to make because the ' +
       'game was already past sign-in, characterEnter for a client that stayed on the selection screen, ' +
       'characterVerify for a different character than the one asked for) so a caller knows what actually went ' +
       'wrong rather than just that something did.',
@@ -1212,6 +1216,17 @@ server.registerTool(
       const normalized = normalizeCharacterRequest(character);
       if (normalized.kind === 'invalid') return fail('character', normalized.reason);
       request = normalized;
+    }
+    // Every wait below reads sunrise.log. With the file sink off the game writes none, and each wait
+    // would time out or read an older boot's file -- a configuration problem dressed as a game one.
+    // Refused before anything is launched or pressed. Unreadable settings do not block: unknown is
+    // not off.
+    try {
+      const sunriseSettings = readSettings(await readFile(getSettingsPath(), 'utf8'));
+      if (sunriseSettings.fileSink === false) return fail('logFile', describeLogFileOff(getSettingsPath()));
+    } catch {
+      // No settings file to read: the game writes its default on first start, and install_check
+      // is where an agent learns more.
     }
     let endpointSetting: EndpointEnableResult | null = null;
     let picked: SelectAnswer | null = null;
@@ -1553,8 +1568,8 @@ server.registerTool(
 );
 
 // Enfichable capabilities: each console-composed tool registers itself here, so adding one is a
-// file plus a line in capabilities/index.ts -- never an edit to the tools above. See
-// docs/superpowers/specs/2026-08-21-sunrise-mcp-capabilities-plugin-design.md.
+// file plus a line in capabilities/index.ts -- never an edit to the tools above. See the README's
+// "Capabilities" section.
 server.registerTool(
   'install_check',
   {
@@ -1569,7 +1584,9 @@ server.registerTool(
       'bin\\x64\\steam_api64.dll, or one built without the MCP layer, so there is no console endpoint, mem.* or ' +
       'character.* to reach); mcpConfigMissing (no bin\\x64\\Sunrise\\mcp.json, so the endpoint is off -- the ' +
       'layer never opens a port nobody asked for; game_enter writes the file); mcpConfigInvalid (a file the DLL ' +
-      'rejects, which leaves the endpoint off); endpointDisabled (a valid file with the endpoint off). ' +
+      'rejects, which leaves the endpoint off); endpointDisabled (a valid file with the endpoint off); logFileOff ' +
+      '(core.logging.file_sink false in Sunrise\'s settings.json: no sunrise.log, which game_enter, log_read and ' +
+      'wait_for read -- 0.5.1 ships it false). ' +
       'The `settings` block carries a `notes` line per value saying what it does to your next call. mcp.json ' +
       'is read once at startup, so changing it means restarting the game, not sending a console command.',
   },

@@ -48,6 +48,7 @@ const healthy = {
   mcpConfigPresent: true,
   mcpConfigValid: true,
   endpointEnabled: true,
+  fileSink: true,
 };
 
 const CASES = [
@@ -65,6 +66,9 @@ const CASES = [
   { name: 'no mcp.json -> mcpConfigMissing', facts: { mcpConfigPresent: false, mcpConfigValid: false, endpointEnabled: false }, expected: 'mcpConfigMissing' },
   { name: 'an mcp.json the DLL would reject -> mcpConfigInvalid', facts: { mcpConfigValid: false, endpointEnabled: false }, expected: 'mcpConfigInvalid' },
   { name: 'endpoint off in mcp.json -> endpointDisabled', facts: { endpointEnabled: false }, expected: 'endpointDisabled' },
+  { name: 'review I2: the log file switched off -> logFileOff, not ok', facts: { fileSink: false }, expected: 'logFileOff' },
+  { name: 'a log setting that could not be read does not block', facts: { fileSink: null }, expected: 'ok' },
+  { name: 'the endpoint question comes before the log one', facts: { endpointEnabled: false, fileSink: false }, expected: 'endpointDisabled' },
   {
     name: 'the build question comes before the config one',
     facts: { dllHasMcpLayer: false, mcpConfigPresent: false, mcpConfigValid: false, endpointEnabled: false },
@@ -91,13 +95,15 @@ async function main() {
 
   await test('every verdict describes itself, and names a file or a key to act on', () => {
     const paths = { gameDir: 'E:\\Destiny_Sunrise', mcpConfigPath: 'E:\\x\\mcp.json', dllPath: 'E:\\x\\steam_api64.dll' };
-    for (const verdict of ['ok', 'gameDirNotFound', 'notMcpBuild', 'mcpConfigMissing', 'mcpConfigInvalid', 'endpointDisabled']) {
+    for (const verdict of ['ok', 'gameDirNotFound', 'notMcpBuild', 'mcpConfigMissing', 'mcpConfigInvalid', 'endpointDisabled', 'logFileOff']) {
       const line = describeInstallVerdict(verdict, healthy, paths);
       assert.equal(typeof line, 'string');
       assert.ok(line.length > 40, `${verdict} described itself in ${line.length} characters`);
     }
     assert.ok(describeInstallVerdict('notMcpBuild', healthy, paths).includes('steam_api64.dll'));
     assert.ok(describeInstallVerdict('notMcpBuild', healthy, paths).includes('mcp'));
+    const logOff = describeInstallVerdict('logFileOff', healthy, { ...paths, settingsPath: 'E:\\x\\settings.json' });
+    assert.ok(logOff.includes('E:\\x\\settings.json') && logOff.includes('"file_sink": true'), logOff);
     for (const verdict of ['mcpConfigMissing', 'mcpConfigInvalid', 'endpointDisabled']) {
       const line = describeInstallVerdict(verdict, healthy, paths);
       assert.ok(line.includes('E:\\x\\mcp.json'), `${verdict} must name the file: ${line}`);
@@ -126,6 +132,27 @@ async function main() {
       assert.equal(read.valid, false, `accepted ${JSON.stringify(text)}`);
       assert.equal(read.endpointEnabled, false, `reported on from ${JSON.stringify(text)}`);
     }
+  });
+
+  await test('review I3: the TS reader agrees with the DLL reader on the cases where they used to differ', () => {
+    // Rejected by the DLL (mcp_settings_parse.cpp), so the endpoint is off in the game.
+    for (const text of [
+      '{"endpoint":{"enabled":true,"port":30975.0}}',
+      '{"endpoint":{"enabled":true,"port":1e4}}',
+      '{"endpoint":{"enabled":null}}',
+      '{"endpoint":{"enabled":true,"port":null}}',
+      `{"x":${'['.repeat(20)}${']'.repeat(20)},"endpoint":{"enabled":true}}`,
+    ]) {
+      const read = readMcpConfig(text);
+      assert.equal(read.valid, false, `accepted ${text}`);
+      assert.equal(read.endpointEnabled, false, `reported on from ${text}`);
+    }
+    // Accepted by the DLL, so this server must not call it invalid (and ensureEndpointEnabled must
+    // not replace a file the game is happily reading).
+    assert.deepEqual(readMcpConfig('{"endpoint":{"enabled":true,"port":0080}}'), { valid: true, endpointEnabled: true, endpointPort: 80 });
+    assert.deepEqual(readMcpConfig('{"other":+5,"endpoint":{"enabled":true}}'), { valid: true, endpointEnabled: true, endpointPort: 30975 });
+    // Keys are compared as written, escapes undecoded, exactly as the DLL does: this is not "endpoint".
+    assert.deepEqual(readMcpConfig('{"\\u0065ndpoint":{"enabled":true}}'), { valid: true, endpointEnabled: false, endpointPort: 30975 });
   });
 
   await test('the MCP layer is recognised in a DLL by the menu page it registers', () => {

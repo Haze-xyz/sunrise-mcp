@@ -72,10 +72,10 @@ depends on who is currently reading the field, so the summary and `field_live` r
 rather than the status declining to act.
 
 **Consequence worth knowing before you type at the in-game console: a hold submitted at the console
-prompt is *always* refused.** Not usually — always, by construction. The overlay drains the command
-queue before it tests its own visibility, so a line typed at the prompt runs on the next frame while
-the console is still showing, and "a Sunrise surface has the keyboard" cannot be false for anything
-typed there. Holds come from this MCP, with no surface open. The prompt is still where the releases
+prompt is *always* refused.** Not usually — always, by construction. On 0.5.1 the prompt is a page of
+the Insert menu, and a line typed there is drained in the same `present()` call, right after the page
+drew it, while the menu is still open, so "a Sunrise surface has the keyboard" cannot be false for
+anything typed there. Holds come from this MCP, with no surface open. The prompt is still where the releases
 and the reported state are useful, and `input.release_all` typed there works — that is the escape
 hatch the asymmetry exists to preserve.
 
@@ -482,35 +482,24 @@ MCP server (so no press record exists), and `bootflow:bap_signin` in the log, `g
 "warlock" }` refused in 0.2s and `console_run "character.list"` then reported `selected_index: -1` —
 nothing had been picked. Before this gate, that same call issued the pick.
 
-### The settings flag, and why this tool writes a file you own
+### The file this tool writes, and why
 
-`client.hold_character_select` in `<game dir>\bin\x64\Sunrise\settings.json` forces the client to
-park on the character-select screen. It is read **once, at boot**, by a hook the console cannot
-reach, and while it is true no chosen character reaches the client. So `game_enter` turns it off, in
-the file, before launching.
+`game_enter` makes sure `<game dir>\bin\x64\Sunrise\mcp.json` switches the console endpoint on
+before it launches, because every tool here needs the endpoint and the DLL reads that file once, at
+boot. It writes rather than refusing with "edit this JSON and call me back" because the caller this
+exists for is an agent with no filesystem access. What makes that acceptable is that it is neither
+silent nor lossy (`ensureEndpointEnabled` in `install.ts`):
 
-That is a deliberate choice over the alternative — refusing with "edit this JSON and call me back" —
-and the argument is short: the caller this feature exists for is an agent holding six MCP tools and
-no filesystem access, for whom that instruction cannot be followed. Refusing would make the feature
-unreachable by its own audience. What makes writing it acceptable is that it is neither silent nor
-lossy:
+- a file that already switches the endpoint on is not touched at all;
+- the response carries a `settings` object naming the file and what was done, on every call that
+  changed anything;
+- the text found first is copied to `mcp.json.sunrise-mcp-backup` before the **first** change and
+  never overwritten afterwards; a file it cannot read is refused, not replaced;
+- a valid file keeps every other key. (Before 0.5 this section described rewriting
+  `client.hold_character_select` in `settings.json`; that key no longer exists.)
 
-- the response carries a `settings` object naming the file, the key, the value found and the value
-  written, on every call that changed anything;
-- the whole original file is copied to `settings.json.sunrise-mcp-backup` before the **first** write
-  and never overwritten afterwards, so the state before this server ever touched it survives;
-- the edit is one token — `true` becomes `false` — with every other byte of a ~74 KB file untouched,
-  because it is a substring replacement and not a `JSON.parse`/`stringify` round trip;
-- it happens only when a character was actually asked for, and only when the flag is not already off.
-
-Two cases are **refused instead of repaired**, without launching: the key being absent (the game's
-own default is `true`, so a value has to be *added*, which means editing the shape of a config file
-rather than one value in it) and the key appearing twice (the game's settings parser rejects a
-duplicate key, so that file is already not being read the way it looks). Both refusals say what to
-edit.
-
-The flag is not put back afterwards. It is read at boot, so restoring it after the launch would mean
-every call had to flip it again, and a crash between flip and restore would leave it flipped anyway.
+It also refuses, launching nothing, when `core.logging.file_sink` is false in Sunrise's own
+`settings.json`: every wait it makes reads `sunrise.log`, and the game would write none.
 
 ### What "the warlock entered" is actually evidence of
 
@@ -552,11 +541,9 @@ this tool does not repeat that, and its `verifiedBy` string says so rather than 
 
 ### Failing, and the stages a caller sees
 
-Five failure stages exist only when a character was asked for, and each says what to do next:
+Four failure stages exist only when a character was asked for, and each says what to do next:
 `character` (the word is not a class — refused locally, before anything is launched, so a typo costs
-nothing), `characterHold` (the settings flag could not be turned off, or *this* boot already has the
-hold hook attached — proven by `ev=bootflow stage=character_select result=ok` in the log, which is
-evidence about the running boot rather than about a file that may have changed since), `characterSelect`
+nothing), `characterSelect`
 (the console refused the pick — an unknown class for this account, two characters sharing a class, an
 index past the roster — with the console's own summary and the account's roster quoted; **or this tool
 refused to make it**, because the game had already reached sign-in), `characterEnter`
@@ -989,7 +976,7 @@ makes this diagnosable now instead of looking like a timeout.
   little-endian (`u64`/`ptr` as `0x`-hex strings, `i64` as a decimal string, the rest as numbers) via
   the pure, separately-tested `decodeStruct`.
 - `scripts/launch-game.ps1` — launch + window-wait, adapted from
-  `a local capture script` (same kill-existing /
+  a local capture script (same kill-existing /
   `Start-Process -PassThru` / poll-`MainWindowHandle` shape; the capture/dump/close steps that
   script also does are dropped, since `game_launch` wants the game left running).
 - `scripts/press-title-screen-key.ps1` — the key-press script `pressTitleScreenKey` shells out to:
@@ -1254,7 +1241,7 @@ That run surfaced two things and four small cleanup items.
   review round" correction above the "Steps 2 and 4" heading in this file. It proves the guards
   work together, not that each is individually pinned.
 
-**Verification (all local, no game, no MSBuild — the author stepped away and the game is closed):**
+**Verification (all local, no game, no MSBuild — the author was away and the game is closed):**
 
 ```
 $ npm run typecheck

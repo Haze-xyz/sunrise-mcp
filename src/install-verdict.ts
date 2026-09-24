@@ -31,6 +31,8 @@ export interface InstallFacts {
   mcpConfigValid: boolean;
   /** Whether the endpoint is on, as the DLL will read it. */
   endpointEnabled: boolean;
+  /** `core.logging.file_sink` in Sunrise's settings.json. `null` when it could not be read. */
+  fileSink: boolean | null;
 }
 
 export type InstallVerdict =
@@ -45,7 +47,10 @@ export type InstallVerdict =
   /** mcp.json exists and the DLL would reject it, which leaves the endpoint off. */
   | 'mcpConfigInvalid'
   /** mcp.json is valid and leaves the endpoint off. */
-  | 'endpointDisabled';
+  | 'endpointDisabled'
+  /** Everything else is right, but the game writes no sunrise.log, which game_enter, log_read and
+   *  wait_for read. Sunrise 0.5.1 ships it off. */
+  | 'logFileOff';
 
 /**
  * Names what an install is.
@@ -64,6 +69,7 @@ export function decideInstallVerdict(facts: InstallFacts): InstallVerdict {
   if (!facts.mcpConfigPresent) return 'mcpConfigMissing';
   if (!facts.mcpConfigValid) return 'mcpConfigInvalid';
   if (!facts.endpointEnabled) return 'endpointDisabled';
+  if (facts.fileSink === false) return 'logFileOff';
   return 'ok';
 }
 
@@ -81,6 +87,7 @@ export function describeInstallVerdict(verdict: InstallVerdict, facts: InstallFa
   gameDir: string | null;
   dllPath: string | null;
   mcpConfigPath: string | null;
+  settingsPath?: string | null;
 }): string {
   const fix = `Write {"endpoint":{"enabled":true}} to ${paths.mcpConfigPath} and restart the game.`;
   switch (verdict) {
@@ -127,6 +134,8 @@ export function describeInstallVerdict(verdict: InstallVerdict, facts: InstallFa
         `${paths.mcpConfigPath} leaves the console endpoint off, so every tool here fails with a ` +
         `refused connection and nothing in the game is wrong. ${fix}`
       );
+    case 'logFileOff':
+      return describeLogFileOff(paths.settingsPath ?? 'bin\\x64\\Sunrise\\settings.json');
     case 'ok':
       return `Install looks right: ${paths.gameDir}, a DLL with the MCP layer, and the console endpoint on in ${paths.mcpConfigPath}.`;
   }
@@ -181,4 +190,18 @@ export function describeBootSettings(settings: BootSettingsFacts): string[] {
     );
   }
   return notes;
+}
+
+/**
+ * Why a game with the log file off cannot be driven from here, and the fix. Shared by install_check
+ * and game_enter, which refuses to launch in that state rather than time out on a log never written.
+ */
+export function describeLogFileOff(settingsPath: string): string {
+  return (
+    `"core"."logging"."file_sink" is false in ${settingsPath}, so the game writes no sunrise.log -- and ` +
+    'game_enter, log_read and wait_for all read that file: they would time out or read an old boot and ' +
+    'look like a game failure. Sunrise 0.5.1 ships it false and rewrites the file with that default ' +
+    `whenever its version is older than the build's. Set "file_sink": true under "core" > "logging" in ` +
+    `${settingsPath} and restart the game.`
+  );
 }
