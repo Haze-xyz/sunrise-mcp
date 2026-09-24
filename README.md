@@ -17,6 +17,7 @@ game's C++ at all.
 
 **Status: a snapshot, frozen on Sunrise 0.5.1.** It is not kept up to date with upstream Sunrise.
 Pull requests that bring it forward are welcome, with no promise about when they are looked at.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for which repository a change goes to.
 
 ## What it drives
 
