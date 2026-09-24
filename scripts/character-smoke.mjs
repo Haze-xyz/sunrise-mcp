@@ -43,23 +43,19 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import {
   CHARACTER_CLASSES,
   CHARACTER_ENTERED_MARKER,
-  HANDS_FREE_ENTRY_WARNING,
-  HOLD_HOOK_MARKER,
-  HOLD_SETTING_KEY,
   SIGN_IN_MARKER,
   decideCharacterStep,
   decideCharacterVerdict,
   describeRoster,
-  disableCharacterSelectHold,
-  holdSettingBackupPath,
   normalizeCharacterRequest,
   parseRoster,
   parseSelectAnswer,
-  rewriteHoldCharacterSelect,
   rosterIsReady,
   rosterWaitFailure,
   shouldKeepPollingRoster,
 } from '../dist/character.js';
+import * as characterModule from '../dist/character.js';
+import { ensureEndpointEnabled, mcpConfigBackupPath } from '../dist/install.js';
 import { waitForLogMarker } from '../dist/keys.js';
 import { decideKillOutcome, waitForGameToExit } from '../dist/game.js';
 
@@ -79,31 +75,25 @@ async function test(name, fn) {
 }
 
 // ---------------------------------------------------------------------------
-// Fixtures: verbatim from the game's own sunrise.log, two runs, 2026-08-19.
+// Fixtures: verbatim from the game's own sunrise.log, Sunrise 0.5.1 + the mcp layer, 2026-09-24.
 // ---------------------------------------------------------------------------
 
-/** The run that entered the world as the warlock (client.hold_character_select false, pick made
- *  before sign-in). Note there is no `stage=character_select` line at all: the hold hook is not
- *  installed when the flag is off, so it writes nothing. */
-const LOG_ENTERED = `client level=info t=15093 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:bap_signin' for reason 'unavailable'.
-client level=info t=31390 ev=retail site=3 text=world_controller:state_manager: Entering state 'character:signin' for reason 'unavailable'.
-client level=info t=31421 ev=retail site=26 text=world_controller:ui_stage: Substage goal changed from 'ENUM(26)' to 'ENUM(30)'.
-client level=info t=31515 ev=retail site=26 text=world_controller:ui_stage: Substage goal changed from 'ENUM(30)' to 'ENUM(31)'.
-client level=info t=31625 ev=retail site=26 text=world_controller:ui_stage: Substage goal changed from 'ENUM(31)' to 'ENUM(19)'.
-client level=info t=31718 ev=retail site=23 text=world_controller:retail_datamine: Total time spent: [334] ms in world controller state: [27] name: [character:signin]
-client level=info t=31718 ev=retail site=24 text=world_controller:state_manager: Leaving state 'character:signin' for reason 'unavailable'.
-client level=info t=31718 ev=retail site=3 text=world_controller:state_manager: Entering state 'cleanup' for reason 'unavailable'.
+/** The run that entered orbit as the titan: character.select titan before sign-in, then Enter. The
+ *  client spends 40 ms in the character step and moves on. 0.5.1 writes no "Leaving state" line at
+ *  all, so leaving the step reads as entering the next ones. */
+const LOG_ENTERED = `client level=info t=17656 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:bap_signin' for reason 'unavailable'.
+client level=info t=25078 ev=retail site=17 text=world_controller:retail_datamine: Total time spent: [7430] ms in world controller state: [22] name: [bootflow:bap_signin]
+client level=info t=32437 ev=retail site=3 text=world_controller:state_manager: Entering state 'character:signin' for reason 'unavailable'.
+client level=info t=32484 ev=retail site=17 text=world_controller:retail_datamine: Total time spent: [40] ms in world controller state: [27] name: [character:signin]
+client level=info t=32484 ev=retail site=3 text=world_controller:state_manager: Entering state 'cleanup' for reason 'unavailable'.
+client level=info t=33578 ev=retail site=3 text=world_controller:state_manager: Entering state 'setup:orbit' for reason 'unavailable'.
 `;
 
-/** The run that parked on the character-selection screen and stayed there (hold flag on). It reaches
- *  the same UI substage 30 -> 31 and stops; the world-load marker was already written minutes of log
- *  earlier, which is why that marker cannot be the one this feature checks. */
-const LOG_PARKED = `client level=info t=3500 ev=bootflow stage=character_select result=ok
-client level=info t=31156 ev=retail site=3 text=world_controller:state_manager: Entering state 'character:signin' for reason 'unavailable'.
-client level=info t=31156 ev=bootflow stage=character_select result=held
-client level=info t=31156 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(26)' to 'ENUM(30)'.
-client level=info t=31187 ev=retail site=25 text=world_controller:ui_stage: Substage goal changed from 'ENUM(30)' to 'ENUM(31)'.
-client level=debug t=31187 ev=bitmap stage=seen handle=0x80B47FD1 result=ok
+/** The run with nobody chosen: 0.5.1 parks on the selection screen on its own. Cut where it sat, 22
+ *  seconds, until a card was clicked. */
+const LOG_PARKED = `client level=info t=203094 ev=retail site=3 text=world_controller:state_manager: Entering state 'bootflow:bap_signin' for reason 'unavailable'.
+client level=info t=211547 ev=retail site=17 text=world_controller:retail_datamine: Total time spent: [8465] ms in world controller state: [22] name: [bootflow:bap_signin]
+client level=info t=219500 ev=retail site=3 text=world_controller:state_manager: Entering state 'character:signin' for reason 'unavailable'.
 `;
 
 /** `character.list`'s rows, verbatim from the live endpoint on 2026-08-19 after entering as the
@@ -136,24 +126,6 @@ const SELECT_ROWS = [
   { key: 'class', value: 'warlock' },
   { key: 'changed', value: true },
 ];
-
-/** A settings.json shaped like the real one: the flag among its siblings, one-line objects, the
- *  exact indentation the game's file uses. */
-const SETTINGS = `{
-  "version": 6,
-  "client": {
-    "ui": { "enabled": true, "toggle_key": "insert" },
-    "fade_release": true,
-    "hold_character_select": true,
-    "hold_spawn": true,
-    "spawn_hold_ms": 30000
-  },
-  "server": {
-    "bap_port": 30974,
-    "console_endpoint": { "enabled": true, "port": 30975 }
-  }
-}
-`;
 
 async function main() {
   const dir = await mkdtemp(path.join(tmpdir(), 'sunrise-mcp-character-smoke-'));
@@ -286,8 +258,8 @@ async function main() {
         false,
         'the run that parked on the selection screen must NOT match -- that is the whole claim',
       );
-      // Both runs enter the step. Only one leaves it, which is why the marker is the leaving line
-      // and not the entering line.
+      // Both runs enter the step. Only one goes on to set up orbit, which is why the marker is that
+      // line and not the step's own.
       assert.ok(LOG_PARKED.includes("Entering state 'character:signin'"));
       assert.ok(LOG_ENTERED.includes("Entering state 'character:signin'"));
 
@@ -301,133 +273,57 @@ async function main() {
       );
     });
 
-    await test('the hold-hook marker is present in the held run and absent when the flag was off', async () => {
-      const enteredLog = path.join(dir, 'entered.log');
-      const parkedLog = path.join(dir, 'parked.log');
-      assert.equal(await waitForLogMarker(HOLD_HOOK_MARKER, 0, parkedLog), true);
-      assert.equal(
-        await waitForLogMarker(HOLD_HOOK_MARKER, 0, enteredLog),
-        false,
-        'nothing is logged at all when hold_character_select is off, which is what makes absence readable',
-      );
-      // The marker is deliberately a prefix of the variant the hook writes when it attaches but
-      // fails to publish its registry entry: both mean attached, and both must be caught.
-      const variant = path.join(dir, 'variant.log');
-      await writeFile(variant, `${HOLD_HOOK_MARKER} reason=step_unpublished\n`, 'utf8');
-      assert.equal(await waitForLogMarker(HOLD_HOOK_MARKER, 0, variant), true);
-      // ...but the failure variant must not be read as attached.
-      const failed = path.join(dir, 'failed.log');
-      await writeFile(failed, 'client level=warn t=3500 ev=bootflow stage=character_select result=fail reason=target\n', 'utf8');
-      assert.equal(await waitForLogMarker(HOLD_HOOK_MARKER, 0, failed), false);
+    await test('nothing about the removed character-select hold is exported any more', () => {
+      for (const name of ['HOLD_HOOK_MARKER', 'HOLD_SETTING_KEY', 'HANDS_FREE_ENTRY_WARNING', 'disableCharacterSelectHold', 'rewriteHoldCharacterSelect']) {
+        assert.equal(name in characterModule, false, `${name} is still exported`);
+      }
     });
 
     // -----------------------------------------------------------------------
-    // The settings rewrite.
+    // mcp.json: the one file game_enter writes, to switch on the endpoint it needs.
     // -----------------------------------------------------------------------
 
-    await test('the rewrite changes the flag and not one other byte of the file', () => {
-      const rewrite = rewriteHoldCharacterSelect(SETTINGS);
-      assert.equal(rewrite.occurrences, 1);
-      assert.equal(rewrite.previous, true);
-      assert.equal(rewrite.changed, true);
-      assert.ok(rewrite.text.includes(`"${HOLD_SETTING_KEY}": false`));
-      // The point of not round-tripping through JSON: everything else has to survive verbatim,
-      // including the one-line "ui" object and the trailing newline.
-      assert.equal(
-        rewrite.text.replace(`"${HOLD_SETTING_KEY}": false`, `"${HOLD_SETTING_KEY}": true`),
-        SETTINGS,
-        'nothing outside the flag may change',
-      );
-      assert.equal(rewrite.text.length, SETTINGS.length + 1); // true -> false
+    await test('a missing mcp.json is created with the endpoint on, and nothing is backed up', async () => {
+      const configPath = path.join(dir, 'missing', 'mcp.json');
+      const result = await ensureEndpointEnabled(configPath);
+      assert.equal(result.status, 'written');
+      assert.equal(JSON.parse(await readFile(configPath, 'utf8')).endpoint.enabled, true);
+      await assert.rejects(() => stat(mcpConfigBackupPath(configPath)));
+      assert.ok(result.message.includes(configPath));
     });
 
-    await test('a flag already false is left alone, and an absent or duplicated key is reported not repaired', () => {
-      const already = rewriteHoldCharacterSelect(
-        SETTINGS.replace(`"${HOLD_SETTING_KEY}": true`, `"${HOLD_SETTING_KEY}": false`),
-      );
-      assert.equal(already.changed, false);
-      assert.equal(already.previous, false);
-      assert.equal(already.occurrences, 1);
-
-      const absent = rewriteHoldCharacterSelect(SETTINGS.replace(`    "${HOLD_SETTING_KEY}": true,\n`, ''));
-      assert.equal(absent.occurrences, 0);
-      assert.equal(absent.changed, false);
-
-      const twice = rewriteHoldCharacterSelect(
-        SETTINGS.replace(`"${HOLD_SETTING_KEY}": true,`, `"${HOLD_SETTING_KEY}": true,\n    "${HOLD_SETTING_KEY}": false,`),
-      );
-      assert.equal(twice.occurrences, 2);
-      assert.equal(twice.changed, false, 'a file the game itself refuses to parse must not be half-edited');
+    await test('an mcp.json that already enables the endpoint is left byte for byte alone', async () => {
+      const configPath = path.join(dir, 'on.json');
+      const text = '{ "endpoint": { "enabled": true, "port": 31000 }, "note": "mine" }\n';
+      await writeFile(configPath, text, 'utf8');
+      const result = await ensureEndpointEnabled(configPath);
+      assert.equal(result.status, 'alreadyOn');
+      assert.equal(await readFile(configPath, 'utf8'), text);
     });
 
-    await test('turning the hold off writes the file, backs up the original once, and says what it did', async () => {
-      const settingsPath = path.join(dir, 'settings.json');
-      await writeFile(settingsPath, SETTINGS, 'utf8');
+    await test('an endpoint switched off is switched on, keeping every other key, with the original backed up once', async () => {
+      const configPath = path.join(dir, 'off.json');
+      const original = '{"endpoint":{"enabled":false,"port":31000},"note":"mine"}\n';
+      await writeFile(configPath, original, 'utf8');
+      const first = await ensureEndpointEnabled(configPath);
+      assert.equal(first.status, 'turnedOn');
+      const after = JSON.parse(await readFile(configPath, 'utf8'));
+      assert.deepEqual(after, { endpoint: { enabled: true, port: 31000 }, note: 'mine' });
+      assert.equal(await readFile(mcpConfigBackupPath(configPath), 'utf8'), original);
 
-      const first = await disableCharacterSelectHold(settingsPath);
-      assert.equal(first.status, 'turnedOff');
-      assert.equal(first.previous, true);
-      assert.equal(first.backupPath, holdSettingBackupPath(settingsPath));
-      assert.ok(first.message.includes(settingsPath));
-      assert.ok(first.message.includes(HOLD_SETTING_KEY));
-      assert.equal(await readFile(settingsPath, 'utf8'), rewriteHoldCharacterSelect(SETTINGS).text);
-      assert.equal(await readFile(first.backupPath, 'utf8'), SETTINGS, 'the backup must be the untouched original');
-
-      // A second call finds it already off and touches nothing.
-      const second = await disableCharacterSelectHold(settingsPath);
-      assert.equal(second.status, 'alreadyOff');
-      assert.equal(second.previous, false);
-      assert.equal(second.backupPath, undefined);
-
-      // And a later call that DOES change it again must not overwrite the first backup -- that copy
-      // is the only record of the state before this server ever touched the file.
-      await writeFile(settingsPath, SETTINGS.replace('"version": 6', '"version": 7'), 'utf8');
-      const third = await disableCharacterSelectHold(settingsPath);
-      assert.equal(third.status, 'turnedOff');
-      assert.equal(
-        await readFile(holdSettingBackupPath(settingsPath), 'utf8'),
-        SETTINGS,
-        'the backup must still be the FIRST original, not the second one',
-      );
+      await writeFile(configPath, '{"endpoint":{"enabled":false}}', 'utf8');
+      const second = await ensureEndpointEnabled(configPath);
+      assert.equal(second.status, 'turnedOn');
+      assert.equal(await readFile(mcpConfigBackupPath(configPath), 'utf8'), original, 'the first backup must survive');
     });
 
-    await test('an absent key or an unreadable file is refused with something to do, and nothing is written', async () => {
-      const noKeyPath = path.join(dir, 'nokey.json');
-      const withoutKey = SETTINGS.replace(`    "${HOLD_SETTING_KEY}": true,\n`, '');
-      await writeFile(noKeyPath, withoutKey, 'utf8');
-      const refusedAbsent = await disableCharacterSelectHold(noKeyPath);
-      assert.equal(refusedAbsent.status, 'refused');
-      assert.ok(refusedAbsent.message.includes(HOLD_SETTING_KEY));
-      assert.ok(refusedAbsent.message.includes('"client"'), 'the refusal must say where to add it');
-      assert.equal(await readFile(noKeyPath, 'utf8'), withoutKey, 'a refusal must not have written anything');
-      await assert.rejects(() => stat(holdSettingBackupPath(noKeyPath)), 'a refusal must not leave a backup behind');
-
-      const missing = await disableCharacterSelectHold(path.join(dir, 'does-not-exist.json'));
-      assert.equal(missing.status, 'refused');
-      assert.ok(missing.message.includes('does-not-exist.json'));
-    });
-
-    await test('a settings file with neither fork key is refused as a build problem, not a missing line', async () => {
-      // The distinction this case exists for. `hold_character_select` absent from a file that still
-      // carries `console_endpoint` is a line someone deleted, and "add it back" is useful advice.
-      // Absent from a file that has neither is a DLL built from upstream, where adding the key
-      // changes nothing because no code reads it -- and telling that reader to edit their settings
-      // is exactly the misleading answer the first outside user of this server was handed.
-      const upstreamPath = path.join(dir, 'upstream.json');
-      const upstreamShaped = SETTINGS.replace(`    "${HOLD_SETTING_KEY}": true,\n`, '').replace(
-        '    "console_endpoint": { "enabled": true, "port": 30975 }\n',
-        '',
-      ).replace('"bap_port": 30974,', '"bap_port": 30974');
-      await writeFile(upstreamPath, upstreamShaped, 'utf8');
-      const refused = await disableCharacterSelectHold(upstreamPath);
-      assert.equal(refused.status, 'refused');
-      assert.ok(refused.message.includes('console_endpoint'), 'it must name the other missing fork key');
-      assert.ok(refused.message.includes('steam_api64.dll'), 'it must say what to actually do');
-      assert.ok(
-        !refused.message.includes('Add "'),
-        'it must NOT tell the reader to add a key that nothing would read',
-      );
-      assert.equal(await readFile(upstreamPath, 'utf8'), upstreamShaped, 'a refusal must not write');
+    await test('an mcp.json the DLL would reject is replaced, and the rejected text is kept aside', async () => {
+      const configPath = path.join(dir, 'bad.json');
+      await writeFile(configPath, '{"endpoint":{"enabled":"yes"}', 'utf8');
+      const result = await ensureEndpointEnabled(configPath);
+      assert.equal(result.status, 'replaced');
+      assert.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), { endpoint: { enabled: true } });
+      assert.equal(await readFile(mcpConfigBackupPath(configPath), 'utf8'), '{"endpoint":{"enabled":"yes"}');
     });
 
     // -----------------------------------------------------------------------
@@ -616,7 +512,7 @@ async function main() {
       });
       assert.equal(parked.ok, false);
       assert.equal(parked.stage, 'characterEnter');
-      assert.ok(parked.message.includes(HOLD_SETTING_KEY));
+      assert.ok(parked.message.includes('setup:orbit'), 'a client that never left the step must be named by the marker it never wrote');
       // Two different waits are in use now (90s after a press this call made, 20s on a game already
       // in the world), so "never appeared" without a figure leaves a caller unable to tell which.
       const timed = decideCharacterVerdict({
@@ -750,18 +646,6 @@ async function main() {
     });
 
     // -----------------------------------------------------------------------
-    await test('the hands-free warning names the flag, the cost, and the way back', () => {
-      // Not a tautology over a constant: these four are what an agent has to be able to act on --
-      // which key, what is missing, that a destination looks fine anyway, and what to do instead.
-      assert.ok(HANDS_FREE_ENTRY_WARNING.includes(HOLD_SETTING_KEY));
-      assert.ok(HANDS_FREE_ENTRY_WARNING.includes('no player object'));
-      assert.match(HANDS_FREE_ENTRY_WARNING, /nobody in it/);
-      assert.match(HANDS_FREE_ENTRY_WARNING, /game_kill/);
-    });
-
-    // What the MCP surface actually publishes, read the way an agent reads it.
-    // -----------------------------------------------------------------------
-
     await test('the running MCP server publishes the character argument, its values, and the ordering warning', async () => {
       const serverPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'index.js');
       const client = new Client({ name: 'character-smoke', version: '0.0.0' });
@@ -791,12 +675,9 @@ async function main() {
         // And it learns that this tool -- not a console line -- is the way to do it, and why.
         assert.match(enter.description, /before the game signs in/i);
         assert.match(enter.description, /characterVerify/);
-        assert.match(enter.description, new RegExp(HOLD_SETTING_KEY));
-        // The trade of the route, in the description an agent reads *before* it calls. Left out,
-        // the only place it appeared was the response of the one call that rewrote the settings
-        // file, and every call after that returned a bare ok.
-        assert.match(enter.description, /no player object/i);
-        assert.match(enter.description, /warning/);
+        // The one file it writes, named where an agent reads before it calls.
+        assert.match(enter.description, /mcp\.json/);
+        assert.doesNotMatch(enter.description, /hold_character_select/);
 
         const run = tools.find((tool) => tool.name === 'console_run');
         assert.ok(run.description.includes('character.select'), 'console_run must name the console entry and its syntax');

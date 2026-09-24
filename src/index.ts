@@ -20,7 +20,7 @@ import {
   MAX_LOG_LINES,
   getExePath,
   getLogPath,
-  getSettingsPath,
+  getMcpConfigPath,
   killGame,
   launchGame,
   readLog,
@@ -29,14 +29,10 @@ import type { LaunchResult } from './game.js';
 import {
   CHARACTER_CLASSES,
   CHARACTER_ENTERED_MARKER,
-  HOLD_HOOK_MARKER,
-  HOLD_SETTING_KEY,
   SIGN_IN_MARKER,
   decideCharacterStep,
   decideCharacterVerdict,
   describeRoster,
-  disableCharacterSelectHold,
-  HANDS_FREE_ENTRY_WARNING,
   normalizeCharacterRequest,
   parseRoster,
   parseSelectAnswer,
@@ -44,7 +40,6 @@ import {
   rosterWaitFailure,
   shouldKeepPollingRoster,
   type GameEnterEntry,
-  type HoldSettingResult,
   type ResolvedCharacterRequest,
   type Roster,
   type SelectAnswer,
@@ -70,9 +65,8 @@ import path from 'node:path';
 import { CAPABILITIES } from './capabilities/index.js';
 import { buildContext } from './capabilities/context.js';
 import { registerCapabilities } from './capabilities/register.js';
-import { inspectInstall, resolveGameDirWithSource } from './install.js';
-import { resolveForkDir } from './sync.js';
-import { buildSolution } from './build.js';
+import { ensureEndpointEnabled, inspectInstall, resolveGameDirWithSource, type EndpointEnableResult } from './install.js';
+import { buildSolution, resolveForkDir } from './build.js';
 import { deployDll } from './deploy.js';
 import {
   appendCall,
@@ -783,8 +777,8 @@ server.registerTool(
       'response: status (one of ok, unknownName, wrongArgumentCount, badArgument, outOfRange, refused, failed), ' +
       'a summary string, and rows of key/value pairs. The endpoint answers from the title screen, before the ' +
       'player presses anything, so this works before any load. The registry is console.*, log.*, movement.*, ' +
-      'player.*, character.*, and -- for driving and reverse-engineering the game from here -- input.*, ' +
-      'mem.* and bootflow.character_step. Call console_describe for the authoritative list with help and bounds -- ' +
+      'player.*, activity.*, character.*, and -- for driving and reverse-engineering the game from here -- ' +
+      'input.* and mem.*. Call console_describe for the authoritative list with help and bounds -- ' +
       'but note it publishes each entry\'s name, kind, help and (for variables) type, bounds and choices, and NOT ' +
       'the arguments a command takes, so what follows is both what an agent needs before deciding what to try and, ' +
       'for these entries, the argument syntax describe does not carry. character.list takes no argument and reports ' +
@@ -800,8 +794,8 @@ server.registerTool(
       'input.hold <vk> / input.release <vk> / ' +
       'input.release_all report Windows virtual keys held to the game through the DLL\'s GetKeyState hook, several ' +
       'at once, and stay held until released -- that is how you drive movement and abilities. input.hold reports ' +
-      'refused, changing nothing, while the key hook is not yet attached or a Sunrise in-game surface has the ' +
-      'keyboard, since the game is told every key is released in both states and the hold would only fire later; ' +
+      'refused, changing nothing, while the key hook is not yet attached or the Sunrise Insert menu is open, ' +
+      'which takes the keyboard, since the game is told every key is released in both states and the hold would only fire later; ' +
       'the summary and a field_live row say which. The two releases always act and report ok in every state, so ' +
       'input.release_all is the way out of a key left held. None of them gets past the title screen: measured ' +
       '2026-08-18, the hook IS attached there and input.hold answers ok, but the title screen does not read it -- ' +
@@ -812,8 +806,6 @@ server.registerTool(
       'mem.write refuses code and any image section the PE marks read-only, but that gate describes the game\'s ' +
       'IMAGE, not its heap: a heap address that is committed, writable and non-executable is accepted, so a bad ' +
       'address there corrupts live game state rather than being refused. Every write is logged. ' +
-      'bootflow.character_step reads the character sign-in boot step\'s heap address, which is otherwise ' +
-      'unreachable -- feed it to mem.read. It does not exist as an entry (unknownName) until that hook attaches. ' +
       'One line only, at most ~493 bytes once wrapped as {"id":N,"line":"..."} in the 512-byte request envelope; ' +
       'longer lines are rejected locally before anything is sent.',
     inputSchema: {
@@ -1164,17 +1156,12 @@ server.registerTool(
       'waiting without pressing again rather than risking a second keystroke into whatever the game is currently ' +
       'showing; if it cannot tell whether the game has already been pressed (an ambiguous or undeterminable ' +
       'state), it declines to press at all. ' +
-      'One thing to know before calling this with a character at all, because it is the whole trade of the ' +
-      'hands-free route and it does not look like a failure: entering without the character screen leaves the ' +
-      'client with no player object -- no ship in orbit, and a destination launched from there loads correctly ' +
-      'with nobody in it. Every ok response on that path repeats it in a warning field. Console, memory and wire ' +
-      'work fine; anything needing a body does not. ' +
-      'With a character named, three more things happen and all three are reported. Before launching, it makes ' +
-      `sure the game's own settings file has client.${HOLD_SETTING_KEY} set to false, because while that is true ` +
-      'the client parks on the selection screen whatever character is chosen, and the flag is read once at boot by ' +
-      'code the console cannot reach; if it has to change the value it says so in a settings object naming the ' +
-      'file, the old value and a backup of the original, and if it cannot (the key is missing, or the file is not ' +
-      'writable) it refuses without launching and says what to edit. After the world loads it confirms which ' +
+      'Before any launch it makes sure bin\\x64\\Sunrise\\mcp.json switches the console endpoint on, because every ' +
+      'tool here needs it and the DLL reads that file once at boot; when it has to write the file it says so in a ' +
+      'settings object naming the file and a backup of what was there. On Sunrise 0.5.1 a pick made before ' +
+      'sign-in walks through the selection screen and arrives in orbit with the ship, and a destination launched ' +
+      'from there has a player in it (measured 2026-09-24). ' +
+      'With a character named, after the world loads it confirms which ' +
       'character actually entered rather than only that something did, and reports requested and entered side by ' +
       'side in a character object: the evidence is sunrise.log recording that the client left the character ' +
       'sign-in step after this call made the pick, which it does not do without a selection, plus the server ' +
@@ -1229,10 +1216,10 @@ server.registerTool(
       if (normalized.kind === 'invalid') return fail('character', normalized.reason);
       request = normalized;
     }
-    let holdSetting: HoldSettingResult | null = null;
+    let endpointSetting: EndpointEnableResult | null = null;
     let picked: SelectAnswer | null = null;
     const settingsReport = (): Record<string, unknown> =>
-      holdSetting !== null && holdSetting.status !== 'alreadyOff' ? { settings: holdSetting } : {};
+      endpointSetting !== null && endpointSetting.status !== 'alreadyOn' ? { settings: endpointSetting } : {};
 
     let stage = 'launch';
     try {
@@ -1333,17 +1320,20 @@ server.registerTool(
         }
 
         case 'launch': {
-          if (request !== null) {
-            // Before the launch, because the flag is read once at boot: after it, this call could
-            // only report a value the running client already ignored. See character.ts for why this
-            // writes a file the user owns instead of refusing with an instruction.
-            stage = 'characterHold';
-            holdSetting = await disableCharacterSelectHold(getSettingsPath());
-            if (holdSetting.status === 'refused') {
-              return fail(stage, holdSetting.message, { settings: holdSetting });
-            }
-            stage = 'launch';
+          // Before the launch, because the DLL reads mcp.json once at boot: after it, this call
+          // could only report a value the running game already ignored. It is this layer's own
+          // file, so it is written rather than refused with an instruction.
+          stage = 'endpointSetting';
+          try {
+            endpointSetting = await ensureEndpointEnabled(getMcpConfigPath());
+          } catch (err) {
+            return fail(
+              stage,
+              `Could not make ${getMcpConfigPath()} switch the console endpoint on: ` +
+                `${err instanceof Error ? err.message : String(err)}. Nothing was launched.`,
+            );
           }
+          stage = 'launch';
           const launch = await launchGame();
           if (launch.status !== 'launched') return fail(stage, launch.message);
           // launchGame()'s own PowerShell script normally reports the pid directly, but fall back to
@@ -1437,31 +1427,6 @@ server.registerTool(
           `Timed out waiting for "${TITLE_SCREEN_MARKER}" in sunrise.log. The game may still be booting.`,
           settingsReport(),
         );
-      }
-
-      // Checked here rather than at the settings file, and only now: the hook logs this line when it
-      // attaches, roughly 3.5s into a boot, so by the time the title-screen marker is in the log the
-      // answer is settled -- and it is an observation of the boot that is actually running, which
-      // re-reading settings.json is not (that file can have changed since this instance started).
-      // Whole-file, and correctly so: sunrise.log holds exactly one boot (log.cpp's open_log_file
-      // renames the old one aside and then opens with CREATE_ALWAYS, which truncates even if that
-      // rename failed). An anchor is not usable here anyway -- this line is written ~3.5s into a
-      // boot, which can be before launchGame returns, so anchoring would miss it and let a held
-      // instance through. See character.ts's note on rotation for what that rests on.
-      if (request !== null) {
-        const holdAttached = await waitForLogMarker(HOLD_HOOK_MARKER, 0, logPath);
-        if (holdAttached) {
-          stage = 'characterHold';
-          return fail(
-            stage,
-            `This instance of the game booted with client.${HOLD_SETTING_KEY} on -- sunrise.log carries ` +
-              `"${HOLD_HOOK_MARKER}", the line the hold hook writes when it attaches -- so the client will park on ` +
-              `the character-selection screen whatever character is chosen. The flag is read once at boot, so it ` +
-              'cannot be changed for this instance. Call game_kill, then game_enter with the same character again; ' +
-              'that path turns the flag off before launching. Enter was not pressed.',
-            { character: characterReport(request, picked, null), ...settingsReport() },
-          );
-        }
       }
 
       stage = 'keyPress';
@@ -1561,10 +1526,6 @@ server.registerTool(
           ...pressWindowReport(press),
           character: verdict.character,
           ...settingsReport(),
-          // Every success on this path is a hands-free entry -- the flag has to be off for the pick
-          // to reach the client -- so this is unconditional, unlike settingsReport() above, which
-          // only speaks on the one call that wrote the file. See HANDS_FREE_ENTRY_WARNING.
-          warning: HANDS_FREE_ENTRY_WARNING,
           message: verdict.message,
           // Captured, not discarded (finding I1): a swallowed write here is the failure that later
           // makes a crash reply claim "nothing had entered the world yet" when something plainly had.
@@ -1603,24 +1564,17 @@ server.registerTool(
     description:
       "Reports what the Sunrise install this server is configured for actually is, without touching the game. " +
       'Answer this before believing any other tool\'s failure: every one of them assumes a game directory, a ' +
-      'settings file at one exact path, and keys in it that only the private fork\'s DLL has -- and when an ' +
-      'assumption is wrong they report it as a game failure (a launch that did not happen, a refused connection, ' +
-      'a settings key to add by hand) rather than as the configuration problem it is. ' +
+      'Sunrise DLL built from the mcp branch, and an mcp.json that switches its console endpoint on -- and when ' +
+      'an assumption is wrong they report it as a game failure (a launch that did not happen, a refused ' +
+      'connection) rather than as the configuration problem it is. ' +
       'The verdict is one of: ok; gameDirNotFound (no directory, or one with no destiny2.exe in it -- the report ' +
-      'says whether SUNRISE_GAME_DIR named it or this server fell back to a path of its own); settingsMissing ' +
-      '(no bin\\x64\\Sunrise\\settings.json, which is the file the DLL reads -- not bin\\x64\\settings.json, which ' +
-      'nothing reads); settingsUnreadable; notForkBuild (neither "console_endpoint" nor "hold_character_select" ' +
-      'is in the settings, so this was built from upstream Sunrise and none of the console endpoint, mem.* or ' +
-      'character.* exists in it); endpointDisabled ("console_endpoint" is there with "enabled": false, which is ' +
-      'what the fork ships by default -- every tool here then fails with a refused connection and nothing in the ' +
-      'game is wrong). The report also carries the settings `version` field, which the game migrates on its own ' +
-      'and which is how a settings file written by a newer build is told from a broken one. ' +
-      'The `settings` block is not bare values: a `notes` line per boot setting says what the value ' +
-      'that is actually there does to your next call, so read them before launching. The one that ' +
-      'changes what you get is `client.hold_character_select`, which any earlier hands-free entry ' +
-      'leaves false: false means no character screen, and no player object either -- orbit with no ' +
-      'ship, and a destination that loads with nobody in it. Both boot settings are read once at ' +
-      'startup, so changing either means restarting the game, not sending a console command.',
+      'says whether SUNRISE_GAME_DIR named it or this server fell back to a path of its own); notMcpBuild (no ' +
+      'bin\\x64\\steam_api64.dll, or one built without the MCP layer, so there is no console endpoint, mem.* or ' +
+      'character.* to reach); mcpConfigMissing (no bin\\x64\\Sunrise\\mcp.json, so the endpoint is off -- the ' +
+      'layer never opens a port nobody asked for; game_enter writes the file); mcpConfigInvalid (a file the DLL ' +
+      'rejects, which leaves the endpoint off); endpointDisabled (a valid file with the endpoint off). ' +
+      'The `settings` block carries a `notes` line per value saying what it does to your next call. mcp.json ' +
+      'is read once at startup, so changing it means restarting the game, not sending a console command.',
   },
   async (): Promise<CallToolResult> => textResult(await inspectInstall()),
 );
@@ -1656,7 +1610,7 @@ server.registerTool(
   'dll_deploy',
   {
     description:
-      "Copies the fork's freshly built steam_api64.dll into the game, from build\\x64\\Release to " +
+      "Copies the steam_api64.dll freshly built from your Sunrise checkout (mcp branch) into the game, from build\\x64\\Release to " +
       'the install\'s bin\\x64 (not the game root: the loader looks in bin\\x64). Returns the byte ' +
       'count and a SHA-256 prefix of what is now in place, so a caller can prove which build is ' +
       'loaded rather than assume the deploy happened. ' +

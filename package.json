@@ -2,7 +2,7 @@
   "name": "sunrise-mcp",
   "version": "0.1.0",
   "private": true,
-  "description": "MCP server for the Sunrise console endpoint (layer 1: transport + five tools). Private, not for publication.",
+  "description": "MCP server that drives and inspects a running Sunrise (Destiny 2 private server) through the console endpoint of the Sunrise mcp branch.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -16,19 +16,16 @@
     "test:keys": "npm run build && node scripts/keys-smoke.mjs && node scripts/game-enter-decision-smoke.mjs && node scripts/character-smoke.mjs",
     "smoke": "npm run build && node scripts/smoke.mjs",
     "test:capabilities": "npm run build && node scripts/mem-facade-smoke.mjs && node scripts/struct-read-smoke.mjs && node scripts/mem-bulk-smoke.mjs && node scripts/context-smoke.mjs && node scripts/register-smoke.mjs",
-    "sync-fork": "npm run build && node scripts/sync-fork.mjs",
-    "test:sync": "npm run build && node scripts/sync-decision-smoke.mjs",
     "test:install": "npm run build && node scripts/install-smoke.mjs",
-    "overlay-apply": "npm run build && node scripts/overlay-apply.mjs",
-    "test:overlay": "npm run build && node scripts/overlay-smoke.mjs",
     "test:deploy": "npm run build && node scripts/deploy-smoke.mjs",
     "test:log": "npm run build && node scripts/log-smoke.mjs",
     "test:endurance": "npm run build && node scripts/endurance-smoke.mjs",
-    "test:wrapper": "npm run build && node scripts/wrapper-smoke.mjs"
+    "test:wrapper": "npm run build && node scripts/wrapper-smoke.mjs",
+    "test:build": "npm run build && node scripts/build-smoke.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "zod": "4.4.3"
+    "@modelcontextprotocol/sdk": "1.30.1",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "20.19.43",

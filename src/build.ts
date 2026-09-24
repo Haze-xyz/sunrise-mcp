@@ -1,9 +1,8 @@
 /**
  * Compiling the Sunrise solution, and saying honestly whether it worked.
  *
- * Split out of sync.ts so an agent can build on demand -- edit the C++, build, deploy, restart --
- * without the merge machinery around it. Same code either way: the daily sync and a one-off build
- * ask the same question and get the same answer.
+ * An agent builds on demand -- edit the C++, build, deploy, restart -- and this says whether the
+ * compiler agreed, from MSBuild's own verdict rather than from an exit code alone.
  */
 
 import { access, writeFile } from 'node:fs/promises';
@@ -14,6 +13,8 @@ import { BUILD_MAX_BUFFER, run } from './run-command.js';
 
 /** An explicit MSBuild path, for a machine where vswhere is absent or the wrong install wins. */
 const MSBUILD_VAR = 'SUNRISE_MSBUILD';
+/** Where a Sunrise checkout is looked for when no argument names one. */
+const FORK_DIR_VAR = 'SUNRISE_FORK_DIR';
 /** vswhere ships with every Visual Studio installer, at a fixed path. */
 const VSWHERE = 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe';
 
@@ -24,6 +25,43 @@ async function exists(target: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Whether this directory is a Sunrise checkout, by the one file the build cannot do without. */
+export async function looksLikeForkCheckout(dir: string): Promise<boolean> {
+  return exists(path.join(dir, 'Sunrise', 'Sunrise.vcxproj'));
+}
+
+/**
+ * Decides which checkout to work on: an explicit argument, then `SUNRISE_FORK_DIR`, then the current
+ * directory *only if it actually looks like one*.
+ *
+ * There is deliberately no built-in default path. A default that points at one machine is the exact
+ * defect this server was told about -- it turns "you have not configured me" into an error message
+ * about the game.
+ *
+ * @throws When nothing resolves, with a message naming what to set.
+ */
+export async function resolveForkDir(
+  explicit?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+): Promise<string> {
+  const candidates: Array<{ dir: string; source: string }> = [];
+  if (explicit) candidates.push({ dir: path.resolve(explicit), source: 'the --repo argument' });
+  const fromEnv = env[FORK_DIR_VAR];
+  if (fromEnv) candidates.push({ dir: path.resolve(fromEnv), source: `${FORK_DIR_VAR}` });
+  candidates.push({ dir: path.resolve(cwd), source: 'the current directory' });
+
+  for (const candidate of candidates) {
+    if (await looksLikeForkCheckout(candidate.dir)) return candidate.dir;
+  }
+  const tried = candidates.map((c) => `${c.dir} (${c.source})`).join('; ');
+  throw new Error(
+    `No Sunrise fork checkout found. Tried: ${tried}. None of them holds Sunrise/Sunrise.vcxproj. ` +
+      `Pass --repo <path>, or set ${FORK_DIR_VAR}. Nothing was guessed on purpose: a default path ` +
+      'belongs to whoever wrote it, not to whoever runs this.',
+  );
 }
 
 /** Finds MSBuild, or reports null so the run says "unproven" instead of pretending it built. */
@@ -85,6 +123,17 @@ export function buildSucceeded(code: number, log: string): boolean {
   return code === 0 && /^Build succeeded\.$/m.test(log);
 }
 
+/**
+ * The MSBuild command line for a Release x64 build of one solution.
+ *
+ * `/p:PreferredToolArchitecture=x64` is what upstream's own CI passes (`.github/workflows/build.yml`):
+ * without it the compiler host can run out of heap on Sunrise's large generated sources (`C1060`,
+ * seen on `collectible_catalog.cpp` in 0.5.1).
+ */
+export function msbuildArgs(solution: string): string[] {
+  return [solution, '/m', '/v:normal', '/p:Configuration=Release', '/p:Platform=x64', '/p:PreferredToolArchitecture=x64'];
+}
+
 export interface BuildResult {
   /** False when no MSBuild could be found, which is "unproven", not "broken". */
   attempted: boolean;
@@ -118,7 +167,7 @@ export async function buildSolution(solutionPath: string): Promise<BuildResult> 
   const solution = await toWindowsPath(solutionPath);
   const built = await run(
     msbuild,
-    [solution, '/m', '/v:normal', '/p:Configuration=Release', '/p:Platform=x64'],
+    msbuildArgs(solution),
     undefined,
     BUILD_MAX_BUFFER,
   );

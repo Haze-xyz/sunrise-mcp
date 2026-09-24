@@ -46,14 +46,18 @@ export function getExePath(): string {
   return path.win32.join(getGameDir(), 'destiny2.exe');
 }
 
-/**
- * The Sunrise DLL's settings file — `bin\x64\Sunrise\settings.json`, *not* `bin\x64\settings.json`,
- * which nothing reads. `game_enter` needs it because one key in it (`client.hold_character_select`)
- * is read at boot and decides whether a chosen character can reach the client at all; see
- * `disableCharacterSelectHold` in character.ts.
- */
+/** Sunrise's own settings file -- `bin\x64\Sunrise\settings.json`, *not* `bin\x64\settings.json`, which nothing reads. */
 export function getSettingsPath(): string {
   return path.win32.join(getGameDir(), 'bin', 'x64', 'Sunrise', 'settings.json');
+}
+
+/**
+ * The MCP layer's own settings file, `bin\x64\Sunrise\mcp.json`, beside Sunrise's settings.json
+ * (and not in it, because upstream rewrites that file whenever its version is older). `game_enter`
+ * makes sure it switches the console endpoint on before it launches; see `ensureEndpointEnabled`.
+ */
+export function getMcpConfigPath(): string {
+  return path.win32.join(getGameDir(), 'bin', 'x64', 'Sunrise', 'mcp.json');
 }
 
 export interface LaunchResult {

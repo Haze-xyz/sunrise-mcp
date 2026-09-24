@@ -63,7 +63,7 @@ export function deployBackupPath(target: string): string {
 }
 
 /**
- * Copies the fork's built DLL into the game.
+ * Copies the DLL built from a Sunrise checkout with the mcp branch into the game.
  *
  * @param forkDir The Sunrise checkout MSBuild ran in.
  * @param gameDir The game install, the folder holding destiny2.exe.

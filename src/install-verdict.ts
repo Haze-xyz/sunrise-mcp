@@ -9,7 +9,7 @@
  * refused, a key to add by hand -- when the real answer was always about configuration.
  */
 
-/** What the settings file says about the fork's own keys. Absent keys are how you tell builds apart. */
+/** What an install holds, as far as this server can tell from files. */
 export interface InstallFacts {
   /** Whether a game directory was resolved at all. */
   gameDirResolved: boolean;
@@ -21,18 +21,16 @@ export interface InstallFacts {
   gameDirExists: boolean;
   /** Whether `destiny2.exe` is in it. A directory without it is not a game install. */
   exePresent: boolean;
-  /** Whether the settings file the DLL reads exists. */
-  settingsPresent: boolean;
-  /** Whether anything at all could be read out of it. False means unreadable or unparseable. */
-  settingsUnderstood: boolean;
-  /** The `version` field, when there was one. Upstream's bundled default was 6, then 8. */
-  settingsVersion: number | null;
-  /** Whether `server.console_endpoint` exists. It is the fork's key: no upstream build has it. */
-  hasConsoleEndpoint: boolean;
-  /** Whether `client.hold_character_select` exists. Also the fork's. */
-  hasHoldCharacterSelect: boolean;
-  /** `server.console_endpoint.enabled`, when the key is there. */
-  endpointEnabled: boolean | null;
+  /** Whether `bin\x64\steam_api64.dll` exists. Without it there is no Sunrise at all. */
+  dllPresent: boolean;
+  /** Whether that DLL carries the MCP layer. `null` when it could not be read: unknown, not no. */
+  dllHasMcpLayer: boolean | null;
+  /** Whether `mcp.json` exists beside Sunrise's settings. */
+  mcpConfigPresent: boolean;
+  /** Whether the DLL would accept it. A rejected file leaves the defaults: endpoint off. */
+  mcpConfigValid: boolean;
+  /** Whether the endpoint is on, as the DLL will read it. */
+  endpointEnabled: boolean;
 }
 
 export type InstallVerdict =
@@ -40,35 +38,32 @@ export type InstallVerdict =
   | 'ok'
   /** No game directory, or one that is not a game install. */
   | 'gameDirNotFound'
-  /** The game is there but the settings file the DLL reads is not. */
-  | 'settingsMissing'
-  /** The settings file exists and nothing could be read out of it. */
-  | 'settingsUnreadable'
-  /** A real install, but not built from the fork: the keys this server drives do not exist in it. */
-  | 'notForkBuild'
-  /** The fork's build, with the console endpoint switched off -- which is every tool here failing
-   *  with a refused connection and nothing saying why. It ships off by default. */
+  /** No Sunrise DLL, or one built without the MCP layer: there is no console endpoint to reach. */
+  | 'notMcpBuild'
+  /** The layer is there, but no mcp.json switches its endpoint on. */
+  | 'mcpConfigMissing'
+  /** mcp.json exists and the DLL would reject it, which leaves the endpoint off. */
+  | 'mcpConfigInvalid'
+  /** mcp.json is valid and leaves the endpoint off. */
   | 'endpointDisabled';
 
 /**
  * Names what an install is.
  *
- * The order matters, and it is the order a person would check in: is the game there, is its
- * configuration there, can it be read, is it the right build, is the thing switched on. Each answer
- * makes the next question meaningful, and reporting a later problem before an earlier one is how a
- * message ends up describing a symptom instead of a cause.
+ * The order matters, and it is the order a person would check in: is the game there, is it the
+ * right build, is the switch file there, can it be read, is the thing switched on. Each answer makes
+ * the next question meaningful, and reporting a later problem before an earlier one is how a message
+ * ends up describing a symptom instead of a cause.
  *
- * `notForkBuild` is decided on *both* fork keys being absent rather than either one, deliberately.
- * A single missing key is a settings file someone edited; both missing is a different build. Saying
- * "this is not the fork" to someone who deleted one line would be a worse error than the one this
- * replaces.
+ * A DLL that could not be read is not called the wrong build: that would send the reader to rebuild
+ * something that may be fine.
  */
 export function decideInstallVerdict(facts: InstallFacts): InstallVerdict {
   if (!facts.gameDirResolved || !facts.gameDirExists || !facts.exePresent) return 'gameDirNotFound';
-  if (!facts.settingsPresent) return 'settingsMissing';
-  if (!facts.settingsUnderstood) return 'settingsUnreadable';
-  if (!facts.hasConsoleEndpoint && !facts.hasHoldCharacterSelect) return 'notForkBuild';
-  if (facts.endpointEnabled === false) return 'endpointDisabled';
+  if (!facts.dllPresent || facts.dllHasMcpLayer === false) return 'notMcpBuild';
+  if (!facts.mcpConfigPresent) return 'mcpConfigMissing';
+  if (!facts.mcpConfigValid) return 'mcpConfigInvalid';
+  if (!facts.endpointEnabled) return 'endpointDisabled';
   return 'ok';
 }
 
@@ -84,8 +79,10 @@ export function canServe(verdict: InstallVerdict): boolean {
  */
 export function describeInstallVerdict(verdict: InstallVerdict, facts: InstallFacts, paths: {
   gameDir: string | null;
-  settingsPath: string | null;
+  dllPath: string | null;
+  mcpConfigPath: string | null;
 }): string {
+  const fix = `Write {"endpoint":{"enabled":true}} to ${paths.mcpConfigPath} and restart the game.`;
   switch (verdict) {
     case 'gameDirNotFound':
       if (!facts.gameDirResolved) {
@@ -106,123 +103,82 @@ export function describeInstallVerdict(verdict: InstallVerdict, facts: InstallFa
         `${paths.gameDir} exists but holds no destiny2.exe, so it is not a game install. ` +
         'Set SUNRISE_GAME_DIR to the folder that does.'
       );
-    case 'settingsMissing':
+    case 'notMcpBuild':
+      return facts.dllPresent
+        ? `${paths.dllPath} is a Sunrise build without the MCP layer (it registers no "mcp.console" ` +
+            'page), so there is no console endpoint to connect to and no mem.* or character.* behind ' +
+            'it. This is a build problem, not a game problem: build the mcp branch of ' +
+            'Haze-xyz/Sunrise (fork_build) and deploy its steam_api64.dll (dll_deploy). See the README.'
+        : `There is no ${paths.dllPath}, so Sunrise is not installed in this game directory. Build the ` +
+            'mcp branch of Haze-xyz/Sunrise (fork_build) and deploy its steam_api64.dll (dll_deploy).';
+    case 'mcpConfigMissing':
       return (
-        `The game is at ${paths.gameDir}, but ${paths.settingsPath} does not exist. That is the ` +
-        'file the Sunrise DLL reads -- not bin\\x64\\settings.json, which nothing reads. Launch the ' +
-        'game once to have it written, or copy the fork\'s resources/default_settings.json there.'
+        `The DLL has the MCP layer, but ${paths.mcpConfigPath} does not exist, so its console endpoint ` +
+        `is off (the layer never opens a port nobody asked for). ${fix} game_enter writes it for you.`
       );
-    case 'settingsUnreadable':
+    case 'mcpConfigInvalid':
       return (
-        `${paths.settingsPath} exists but nothing could be read out of it, so this server cannot ` +
-        'tell which build it is talking to. It is JSON; check it parses.'
-      );
-    case 'notForkBuild':
-      return (
-        `${paths.settingsPath} carries neither "console_endpoint" nor "hold_character_select". ` +
-        'Both are additions of the private Sunrise fork this server pairs with, so this install was ' +
-        'built from upstream Sunrise (or another fork), and none of the things this server drives ' +
-        'exist in it -- there is no console endpoint to connect to, and no mem.* or character.* ' +
-        'behind it. This is a build problem, not a game problem: deploy a steam_api64.dll built ' +
-        'from the fork. See the README.'
+        `${paths.mcpConfigPath} exists but the DLL rejects it -- it must be a JSON object, with ` +
+        '"endpoint"."enabled" a boolean and "endpoint"."port" an integer from 1 to 65535 -- so the ' +
+        `endpoint stays off. ${fix}`
       );
     case 'endpointDisabled':
       return (
-        `This is the fork's build, and "console_endpoint" is present in ${paths.settingsPath} with ` +
-        '"enabled": false -- which is what the fork ships by default. While it is off, the listener ' +
-        'is never created, so every tool here fails with a refused connection and nothing in the ' +
-        'game is wrong. Set "enabled": true under "server" > "console_endpoint" and restart the game.'
+        `${paths.mcpConfigPath} leaves the console endpoint off, so every tool here fails with a ` +
+        `refused connection and nothing in the game is wrong. ${fix}`
       );
-    case 'ok': {
-      const version = facts.settingsVersion === null ? 'no version field' : `settings version ${facts.settingsVersion}`;
-      return `Install looks right: ${paths.gameDir}, the fork's keys are present, the console endpoint is on (${version}).`;
-    }
+    case 'ok':
+      return `Install looks right: ${paths.gameDir}, a DLL with the MCP layer, and the console endpoint on in ${paths.mcpConfigPath}.`;
   }
 }
 
-/** The settings values a report carries beyond the verdict. `null` is "not read", never "false". */
+/** The mcp.json values a report carries beyond the verdict. */
 export interface BootSettingsFacts {
-  /** `server.console_endpoint.enabled`. */
-  endpointEnabled: boolean | null;
-  /** `server.console_endpoint.port`. */
-  endpointPort: number | null;
-  /** `client.hold_character_select`. */
-  holdCharacterSelect: boolean | null;
+  endpointEnabled: boolean;
+  endpointPort: number;
+  /** `core.logging.file_sink` in Sunrise's settings.json; `null` when it could not be read. */
+  fileSink: boolean | null;
 }
 
 /**
  * Says what the boot settings in hand actually do, one line each.
  *
- * It exists because of the second piece of outside feedback this server got: *"one thing that is not
- * clear to my agent are boot settings"*. The settings block of a report is bare values --
- * `holdCharacterSelect: true` -- and an agent reading that has nothing to decide with: it cannot
- * tell that the flag is the difference between a launch that parks on a screen forever and one that
- * enters by itself, nor that the second costs it the player object. So each value gets a sentence
+ * It exists because of a piece of outside feedback: *"one thing that is not clear to my agent are
+ * boot settings"*. Bare values leave an agent nothing to decide with, so each value gets a sentence
  * about the value that is there, not a manual for the key.
  *
- * Both keys are read once, at startup, by code the console cannot reach -- the hold hook installs in
- * `bootflow_hook_lifecycle.cpp::install()` and the listener is created in `server_runtime.cpp` --
- * which is why the header line says a change needs a restart rather than a command.
- *
- * @param settings The values install.ts read, with `null` for anything it could not read.
- * @returns One header line plus one line per setting, in the order a caller meets them.
+ * mcp.json is read once, when the layer initializes, which is why the header line says a change
+ * needs a restart rather than a command.
  */
 export function describeBootSettings(settings: BootSettingsFacts): string[] {
   const notes: string[] = [
-    'Boot settings: both are read once at startup by code the console cannot reach, so changing ' +
-      'either needs the game restarted (game_kill, then game_enter). No console command moves them.',
+    'Boot settings: mcp.json is read once at startup, so changing it needs the game restarted ' +
+      '(game_kill, then game_enter). No console command moves it.',
   ];
-
-  if (settings.endpointEnabled === true) {
+  if (settings.endpointEnabled) {
     notes.push(
-      '"server.console_endpoint": enabled, ' +
-        (settings.endpointPort === null ? 'port not read' : `port ${settings.endpointPort}`) +
-        ' -- the socket console_run, console_describe and every mem.* and character.* tool talk to. ' +
-        'It serves one client at a time, and a client holds it for the life of its process, so a ' +
-        'second MCP server pointed at this game is refused rather than queued.',
-    );
-  } else if (settings.endpointEnabled === false) {
-    notes.push(
-      '"server.console_endpoint": { "enabled": false } -- the listener is never created, so every ' +
-        'tool that talks to the game fails with a refused connection and nothing in the game is wrong.',
+      `"endpoint": enabled, port ${settings.endpointPort} -- the socket console_run, console_describe ` +
+        'and every mem.* and character.* tool talk to. It serves one client at a time, and a client ' +
+        'holds it for the life of its process, so a second MCP server pointed at this game is ' +
+        'refused rather than queued.',
     );
   } else {
     notes.push(
-      '"server.console_endpoint": not read, so whether anything can connect is unknown. That is a ' +
-        'settings file this server could not parse, not a report that the endpoint is off.',
+      '"endpoint": off -- the listener is never created, so every tool that talks to the game is ' +
+        'refused a connection and nothing in the game is wrong.',
     );
   }
-
-  if (settings.holdCharacterSelect === true) {
+  if (settings.fileSink === false) {
     notes.push(
-      '"client.hold_character_select": true -- the client stops at the character-select screen and ' +
-        'waits for a pick, so a launch with nobody choosing parks there for good. It is also the ' +
-        'state a session meant to be played wants: the client\'s own character-select step, actually ' +
-        'run, is what creates the player object (measured 2026-08-19 -- picked by hand, the ship is ' +
-        'in orbit and a destination spawns normally). game_enter { character } rewrites this key to ' +
-        'false before it launches, copies the untouched original aside the first time it ever does so, ' +
-        'and reports the change in its response.',
+      '"core.logging.file_sink": false in Sunrise\'s settings.json -- the game writes no sunrise.log, so ' +
+        'log_read, wait_for and game_enter see nothing and game_enter times out. Sunrise 0.5.1 ships it off ' +
+        'and rewrites the file with that default whenever its version is older. Set it to true and restart.',
     );
-  } else if (settings.holdCharacterSelect === false) {
+  } else if (settings.fileSink === null) {
     notes.push(
-      '"client.hold_character_select": false -- there is no character screen: the sign-in step ' +
-        'selects on its own, which is what lets game_enter { character } reach the world with no ' +
-        'hands. What it costs, measured 2026-08-19 and 2026-08-21: the client arrives in orbit with ' +
-        'no player object -- no ship, player.position present:false -- and a destination launched ' +
-        'from there loads correctly, with nobody in it: a black screen and no error anywhere. So if ' +
-        'what you are testing is a destination, this value is the one that guarantees you cannot ' +
-        'see it, and it will not look like a failure. Nothing restores the key: set it back to true, ' +
-        'restart, and make the pick on the real screen (game_enter with no character stops there, ' +
-        'and input.hold drives that screen) before going anywhere.',
-    );
-  } else {
-    notes.push(
-      '"client.hold_character_select": not read. The game\'s own default is true ' +
-        '(core/settings/client/definition.h), which is the parks-on-the-screen behaviour. ' +
-        'game_enter { character } refuses rather than adding an absent key, so add it under ' +
-        '"client" by hand if a hands-free entry is what you want.',
+      '"core.logging.file_sink": not read from Sunrise\'s settings.json. If it is false the game writes no ' +
+        'sunrise.log, and log_read, wait_for and game_enter see nothing.',
     );
   }
-
   return notes;
 }

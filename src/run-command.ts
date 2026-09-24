@@ -1,9 +1,8 @@
 /**
  * Running a child process and getting its exit code back instead of an exception.
  *
- * Every caller here treats a non-zero exit as information -- git says "conflict" that way, MSBuild
- * says "does not compile" that way -- so the one thing this must not do is throw on it. Shared by
- * sync.ts and overlay.ts, which is why it is its own file rather than a copy in each.
+ * Every caller here treats a non-zero exit as information -- MSBuild says "does not compile" that
+ * way, vswhere says "not installed" that way -- so the one thing this must not do is throw on it.
  */
 
 import { execFile } from 'node:child_process';

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Table-driven test of decideInstallVerdict / describeInstallVerdict (dist/install-verdict.js) and
- * readSettings (dist/install.js). Pure functions over plain objects and strings: no game, no
- * filesystem, no endpoint.
+ * readMcpConfig / dllHasMcpLayer (dist/install.js). Pure functions over plain objects, strings and
+ * buffers: no game, no filesystem, no endpoint.
  *
  * Run after `npm run build`:
  *   node scripts/install-smoke.mjs
@@ -12,16 +12,16 @@
  * The two cases worth reading before the rest, because they are the ones that would send a reader to
  * the wrong place:
  *
- * - an endpoint whose state could not be read is reported unknown, never disabled. A probe-only read
- *   of an unparseable settings file cannot see inside `console_endpoint`, and "your endpoint is off"
- *   aimed at someone whose endpoint is on is a worse error than saying nothing.
- * - one missing fork key is a settings file someone edited; *both* missing is a different build.
- *   Only the second earns `notForkBuild`.
+ * - mcp.json is read with the DLL's own rules. A file the DLL would reject leaves the endpoint off in
+ *   the game, so this server must call it invalid too, and never report "on" from a document the
+ *   game ignored.
+ * - the build is told from the DLL itself. Sunrise's settings.json no longer carries any key of this
+ *   layer, so nothing in it can say whether the MCP layer was compiled in.
  */
 
 import assert from 'node:assert/strict';
 import { decideInstallVerdict, describeBootSettings, describeInstallVerdict } from '../dist/install-verdict.js';
-import { readSettings } from '../dist/install.js';
+import { dllHasMcpLayer, readMcpConfig } from '../dist/install.js';
 
 const results = [];
 
@@ -43,11 +43,10 @@ const healthy = {
   gameDirFromEnv: true,
   gameDirExists: true,
   exePresent: true,
-  settingsPresent: true,
-  settingsUnderstood: true,
-  settingsVersion: 8,
-  hasConsoleEndpoint: true,
-  hasHoldCharacterSelect: true,
+  dllPresent: true,
+  dllHasMcpLayer: true,
+  mcpConfigPresent: true,
+  mcpConfigValid: true,
   endpointEnabled: true,
 };
 
@@ -56,36 +55,20 @@ const CASES = [
   { name: 'no directory resolved -> gameDirNotFound', facts: { gameDirResolved: false }, expected: 'gameDirNotFound' },
   { name: 'directory does not exist -> gameDirNotFound', facts: { gameDirExists: false }, expected: 'gameDirNotFound' },
   { name: 'directory without destiny2.exe -> gameDirNotFound', facts: { exePresent: false }, expected: 'gameDirNotFound' },
-  { name: 'no settings file -> settingsMissing', facts: { settingsPresent: false }, expected: 'settingsMissing' },
+  { name: 'no steam_api64.dll -> notMcpBuild', facts: { dllPresent: false, dllHasMcpLayer: null }, expected: 'notMcpBuild' },
+  { name: 'a DLL without the layer -> notMcpBuild', facts: { dllHasMcpLayer: false }, expected: 'notMcpBuild' },
   {
-    name: 'settings that cannot be read at all -> settingsUnreadable',
-    facts: { settingsUnderstood: false },
-    expected: 'settingsUnreadable',
-  },
-  {
-    name: 'neither fork key -> notForkBuild',
-    facts: { hasConsoleEndpoint: false, hasHoldCharacterSelect: false, endpointEnabled: null },
-    expected: 'notForkBuild',
-  },
-  {
-    name: 'only hold_character_select missing is an edited file, not another build',
-    facts: { hasHoldCharacterSelect: false },
+    name: 'a DLL that could not be read is unknown, and does not block the rest',
+    facts: { dllHasMcpLayer: null },
     expected: 'ok',
   },
+  { name: 'no mcp.json -> mcpConfigMissing', facts: { mcpConfigPresent: false, mcpConfigValid: false, endpointEnabled: false }, expected: 'mcpConfigMissing' },
+  { name: 'an mcp.json the DLL would reject -> mcpConfigInvalid', facts: { mcpConfigValid: false, endpointEnabled: false }, expected: 'mcpConfigInvalid' },
+  { name: 'endpoint off in mcp.json -> endpointDisabled', facts: { endpointEnabled: false }, expected: 'endpointDisabled' },
   {
-    name: 'only console_endpoint missing is an edited file, not another build',
-    facts: { hasConsoleEndpoint: false, endpointEnabled: null },
-    expected: 'ok',
-  },
-  {
-    name: 'the fork build with the endpoint switched off -> endpointDisabled',
-    facts: { endpointEnabled: false },
-    expected: 'endpointDisabled',
-  },
-  {
-    name: 'an endpoint state that could not be read is unknown, never disabled',
-    facts: { endpointEnabled: null },
-    expected: 'ok',
+    name: 'the build question comes before the config one',
+    facts: { dllHasMcpLayer: false, mcpConfigPresent: false, mcpConfigValid: false, endpointEnabled: false },
+    expected: 'notMcpBuild',
   },
 ];
 
@@ -98,114 +81,79 @@ async function main() {
   }
 
   await test('a missing directory blames the setting when there is one, and this server when there is not', () => {
-    const paths = { gameDir: 'E:\\Destiny_Sunrise', settingsPath: 'E:\\...\\settings.json' };
-    const fromEnv = describeInstallVerdict(
-      'gameDirNotFound',
-      { ...healthy, gameDirExists: false, gameDirFromEnv: true },
-      paths,
-    );
+    const paths = { gameDir: 'E:\\Destiny_Sunrise', mcpConfigPath: 'E:\\x\\mcp.json', dllPath: 'E:\\x\\steam_api64.dll' };
+    const fromEnv = describeInstallVerdict('gameDirNotFound', { ...healthy, gameDirExists: false, gameDirFromEnv: true }, paths);
     assert.ok(fromEnv.includes('SUNRISE_GAME_DIR points at'), fromEnv);
-
-    const fallback = describeInstallVerdict(
-      'gameDirNotFound',
-      { ...healthy, gameDirExists: false, gameDirFromEnv: false },
-      paths,
-    );
+    const fallback = describeInstallVerdict('gameDirNotFound', { ...healthy, gameDirExists: false, gameDirFromEnv: false }, paths);
     assert.ok(fallback.includes('is not set'), fallback);
-    // The sentence that had to change: the fallback path is the author's, and the message says so
-    // instead of presenting it as the reader's own configuration.
     assert.ok(fallback.includes("author's own path"), fallback);
   });
 
   await test('every verdict describes itself, and names a file or a key to act on', () => {
-    const paths = { gameDir: 'E:\\Destiny_Sunrise', settingsPath: 'E:\\x\\settings.json' };
-    for (const verdict of [
-      'ok',
-      'gameDirNotFound',
-      'settingsMissing',
-      'settingsUnreadable',
-      'notForkBuild',
-      'endpointDisabled',
-    ]) {
+    const paths = { gameDir: 'E:\\Destiny_Sunrise', mcpConfigPath: 'E:\\x\\mcp.json', dllPath: 'E:\\x\\steam_api64.dll' };
+    for (const verdict of ['ok', 'gameDirNotFound', 'notMcpBuild', 'mcpConfigMissing', 'mcpConfigInvalid', 'endpointDisabled']) {
       const line = describeInstallVerdict(verdict, healthy, paths);
       assert.equal(typeof line, 'string');
       assert.ok(line.length > 40, `${verdict} described itself in ${line.length} characters`);
     }
-    assert.ok(describeInstallVerdict('notForkBuild', healthy, paths).includes('steam_api64.dll'));
-    assert.ok(describeInstallVerdict('endpointDisabled', healthy, paths).includes('"enabled": true'));
-    assert.ok(describeInstallVerdict('settingsMissing', healthy, paths).includes('bin\\x64\\settings.json'));
+    assert.ok(describeInstallVerdict('notMcpBuild', healthy, paths).includes('steam_api64.dll'));
+    assert.ok(describeInstallVerdict('notMcpBuild', healthy, paths).includes('mcp'));
+    for (const verdict of ['mcpConfigMissing', 'mcpConfigInvalid', 'endpointDisabled']) {
+      const line = describeInstallVerdict(verdict, healthy, paths);
+      assert.ok(line.includes('E:\\x\\mcp.json'), `${verdict} must name the file: ${line}`);
+      assert.ok(line.includes('{"endpoint":{"enabled":true}}'), `${verdict} must show the fix: ${line}`);
+    }
   });
 
-  await test('a real settings document is read through JSON', () => {
-    const findings = readSettings(
-      JSON.stringify({
-        version: 8,
-        client: { hold_character_select: true },
-        server: { console_endpoint: { enabled: false, port: 30975 } },
-      }),
-    );
-    assert.equal(findings.understood, true);
-    assert.equal(findings.version, 8);
-    assert.equal(findings.hasConsoleEndpoint, true);
-    assert.equal(findings.hasHoldCharacterSelect, true);
-    assert.equal(findings.endpointEnabled, false);
-    assert.equal(findings.endpointPort, 30975);
-    assert.equal(findings.holdCharacterSelect, true);
+  await test('mcp.json is read with the DLL rules: enabled, port, unknown keys skipped, BOM accepted', () => {
+    assert.deepEqual(readMcpConfig('{"endpoint":{"enabled":true,"port":31000}}'), { valid: true, endpointEnabled: true, endpointPort: 31000 });
+    assert.deepEqual(readMcpConfig('{}'), { valid: true, endpointEnabled: false, endpointPort: 30975 });
+    assert.deepEqual(readMcpConfig('\uFEFF{"x":[1],"endpoint":{"enabled":true}}'), { valid: true, endpointEnabled: true, endpointPort: 30975 });
   });
 
-  await test('an upstream settings document is understood, and has neither fork key', () => {
-    const findings = readSettings(JSON.stringify({ version: 8, client: { hold_spawn: true }, server: { bap_port: 30974 } }));
-    assert.equal(findings.understood, true);
-    assert.equal(findings.hasConsoleEndpoint, false);
-    assert.equal(findings.hasHoldCharacterSelect, false);
-    assert.equal(decideInstallVerdict({ ...healthy, ...findings, endpointEnabled: null }), 'notForkBuild');
+  await test('an mcp.json the DLL rejects is invalid here too, with the endpoint off', () => {
+    for (const text of [
+      '',
+      '[]',
+      '{"endpoint":',
+      '{"endpoint":{"enabled":"yes"}}',
+      '{"endpoint":{"enabled":true,"port":70000}}',
+      '{"endpoint":{"enabled":true,"port":0}}',
+      '{"endpoint":{"enabled":true,"port":1.5}}',
+      '{"endpoint":[]}',
+    ]) {
+      const read = readMcpConfig(text);
+      assert.equal(read.valid, false, `accepted ${JSON.stringify(text)}`);
+      assert.equal(read.endpointEnabled, false, `reported on from ${JSON.stringify(text)}`);
+    }
   });
 
-  await test('an unparseable document still answers the build question, and stays silent on the rest', () => {
-    // A trailing comma: not JSON, still obviously the fork's shape.
-    const findings = readSettings('{ "version": 6, "server": { "console_endpoint": { "enabled": true }, }, }');
-    assert.equal(findings.understood, true);
-    assert.equal(findings.version, 6);
-    assert.equal(findings.hasConsoleEndpoint, true);
-    // The point of the whole case: not read, so not reported as false.
-    assert.equal(findings.endpointEnabled, null);
-    assert.notEqual(decideInstallVerdict({ ...healthy, ...findings }), 'endpointDisabled');
+  await test('the MCP layer is recognised in a DLL by the menu page it registers', () => {
+    assert.equal(dllHasMcpLayer(Buffer.from('xx\0mcp.console\0yy', 'latin1')), true);
+    assert.equal(dllHasMcpLayer(Buffer.from('xx\0core.logs\0yy', 'latin1')), false);
   });
 
-  await test('a document with nothing recognizable in it is reported unreadable', () => {
-    const findings = readSettings('this is not a settings file');
-    assert.equal(findings.understood, false);
-    assert.equal(decideInstallVerdict({ ...healthy, settingsUnderstood: false }), 'settingsUnreadable');
+  await test('the endpoint note names the port when it is on, and says what off costs', () => {
+    const on = describeBootSettings({ endpointEnabled: true, endpointPort: 30975 }).join('\n');
+    assert.ok(on.includes('30975'), on);
+    const off = describeBootSettings({ endpointEnabled: false, endpointPort: 30975 }).join('\n');
+    assert.ok(off.includes('refused'), off);
   });
 
-  // describeBootSettings. The point of these is that the note is about the value that is *there*:
-  // the same key gets opposite advice, and the unread case gets neither.
-  await test('a settings note is written for the value in hand, not for the key', () => {
-    const held = describeBootSettings({ endpointEnabled: true, endpointPort: 30975, holdCharacterSelect: true }).join('\n');
-    const free = describeBootSettings({ endpointEnabled: true, endpointPort: 30975, holdCharacterSelect: false }).join('\n');
-    assert.ok(held.includes('waits for a pick'));
-    assert.ok(held.includes('game_enter { character }'));
-    // The cost belongs to the false note and nowhere else: it is what an agent reading `false` has
-    // to know before it launches and reports an empty world as a success.
-    assert.ok(free.includes('no player object'));
-    assert.ok(free.includes('no ship'));
-    assert.ok(!held.includes('no player object'));
-  });
-
-  await test('the endpoint note names the port when it is on, and never calls unread off', () => {
-    const on = describeBootSettings({ endpointEnabled: true, endpointPort: 30975, holdCharacterSelect: true }).join('\n');
-    const off = describeBootSettings({ endpointEnabled: false, endpointPort: 30975, holdCharacterSelect: true }).join('\n');
-    const unknown = describeBootSettings({ endpointEnabled: null, endpointPort: null, holdCharacterSelect: null }).join('\n');
-    assert.ok(on.includes('port 30975'));
-    assert.ok(off.includes('refused connection'));
-    assert.ok(unknown.includes('not read'));
-    assert.ok(!unknown.includes('refused connection'));
+  await test('a log file switched off is named, because log_read and wait_for then see nothing', () => {
+    const off = describeBootSettings({ endpointEnabled: true, endpointPort: 30975, fileSink: false }).join('\n');
+    assert.ok(off.includes('file_sink'), off);
+    assert.ok(off.includes('wait_for'), off);
+    const on = describeBootSettings({ endpointEnabled: true, endpointPort: 30975, fileSink: true }).join('\n');
+    assert.ok(!on.includes('file_sink": false'), on);
+    const unknown = describeBootSettings({ endpointEnabled: true, endpointPort: 30975, fileSink: null }).join('\n');
+    assert.ok(unknown.includes('file_sink'), unknown);
   });
 
   await test('every set of notes says the values are boot-time', () => {
-    for (const hold of [true, false, null]) {
-      const notes = describeBootSettings({ endpointEnabled: null, endpointPort: null, holdCharacterSelect: hold });
-      assert.ok(notes[0].includes('restarted'), `header missing for hold=${hold}`);
+    for (const enabled of [true, false]) {
+      const notes = describeBootSettings({ endpointEnabled: enabled, endpointPort: 30975 });
+      assert.ok(notes[0].includes('restart'), notes[0]);
     }
   });
 

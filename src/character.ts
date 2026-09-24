@@ -1,8 +1,7 @@
 /**
  * Everything `game_enter`'s optional `character` argument needs that is not I/O against the game:
- * naming a character, reading the console's two `character.*` answers, the two log markers that say
- * what the client did with a pick, and the one settings flag that decides whether it can act on it
- * at all.
+ * naming a character, reading the console's two `character.*` answers, and the log markers that say
+ * what the client did with a pick.
  *
  * Split out of index.ts for the same reason game-enter-decision.ts was: all of this is decidable
  * from text, so it can be pinned by a test table (scripts/character-smoke.mjs) instead of only ever
@@ -10,7 +9,7 @@
  *
  * ## Why the ordering these pieces serve is the tool's and not the caller's
  *
- * Measured on the live game on 2026-08-19, one launch, `client.hold_character_select` off:
+ * Measured on the live game on 2026-08-19 (Sunrise before 0.5, character-select hold off):
  *
  * ```
  * wall t= 0.0s  launch
@@ -18,8 +17,13 @@
  * wall t=22.8s  "Entering state 'bootflow:start'"  (the title-screen marker, client t=12.1s)
  * wall t=24.7s  Enter pressed, SendInput
  *      client t=15.1s  "Entering state 'bootflow:bap_signin'"
- *      client t=31.7s  "Leaving state 'character:signin'"  -> the client left the pick screen
+ *      client t=31.7s  the client left the pick screen
  * ```
+ *
+ * Measured again on Sunrise 0.5.1 on 2026-09-24, pick made at the title screen: bap_signin at client
+ * t=17.7s, `character:signin` entered at t=32.4s and left after 40 ms, `setup:orbit` at t=33.6s,
+ * orbit with the ship, and a destination launched from there has a player in it. With no pick, 0.5.1
+ * parks on the selection screen on its own.
  *
  * The pick has to be in State before the first Family-4 push, which is built during
  * `bootflow:bap_signin` — client t=15.1s in that run, i.e. **2.3 seconds after the title-screen
@@ -32,10 +36,8 @@
  * `console_run` line an agent is told to send at the right moment.
  */
 
-import { copyFile, readFile, rename, stat, writeFile } from 'node:fs/promises';
 
 import type { RunRow } from './endpoint.js';
-import { readSettings } from './install.js';
 
 /** The classes this game authors, lowercase, exactly as `character.list` prints them. */
 export const CHARACTER_CLASSES = ['titan', 'hunter', 'warlock'] as const;
@@ -43,55 +45,17 @@ export const CHARACTER_CLASSES = ['titan', 'hunter', 'warlock'] as const;
 export type CharacterClass = (typeof CHARACTER_CLASSES)[number];
 
 /**
- * The line sunrise.log emits when the client leaves the character sign-in boot step.
+ * The line sunrise.log emits when the client has left the character sign-in step and set up orbit.
  *
  * This is the one honest "a character actually entered" signal available from outside the process,
- * and it is not `WORLD_LOADED_MARKER`: measured, `successfully changed world to: orbit_d2` is
- * written at client t=27.9s, nearly four seconds *before* the client even enters `character:signin`
- * at t=31.4s, and it appears identically on a run that then parks on the character-select screen
- * forever. Leaving that step is what does not happen without a selection — the control run in
- * task-select-report.md posted the same UI substage 26 -> 30 -> 31 and then stopped there, while
- * the run with a pick crossed it in 334 ms and went on to `cleanup`.
+ * and it is not `WORLD_LOADED_MARKER`: `successfully changed world to: orbit_d2` is written before
+ * the client even enters `character:signin` (client t=29.3s against t=32.4s, measured on 0.5.1),
+ * and it appears identically on a run that then parks on the character-select screen. Sunrise 0.5.1
+ * writes no "Leaving state" line at all, so leaving the step reads as entering the next ones:
+ * `cleanup`, then `setup:orbit`. The second is the one used, because it is what a player in orbit
+ * means; a run parked on the screen writes neither.
  */
-export const CHARACTER_ENTERED_MARKER = "Leaving state 'character:signin'";
-
-/**
- * The line sunrise.log emits when the character-select hold hook attaches, which happens once per
- * boot and only when `client.hold_character_select` was true in settings.json at startup (see
- * `bootflow_hook_lifecycle.cpp`: the install is guarded by that flag, so nothing at all is logged
- * when it is off).
- *
- * Read as evidence about **the boot that is running now**, which is what makes it better than
- * re-reading settings.json: the file can have been changed since this process started, the flag
- * cannot. It is a prefix of the `result=ok reason=step_unpublished` variant, which means the same
- * thing (attached, registry entry not published), so a substring test covers both.
- */
-export const HOLD_HOOK_MARKER = 'ev=bootflow stage=character_select result=ok';
-
-/** The settings key this feature has to have off, under the `client` object. */
-export const HOLD_SETTING_KEY = 'hold_character_select';
-
-/**
- * What a successful hands-free entry did *not* give the caller, said in the response of every one of
- * them.
- *
- * Unconditional on the character path, and that is the point. The flag has to be off for a pick to
- * reach the client, so every `game_enter { character }` that returns ok entered by this route -- but
- * the file is only written once, so `settings` appears in the first response and never again, and
- * from the second call on the response read `status: ok`, `entered: warlock` and nothing else. An
- * agent reading that goes to a destination, gets a world that loads with no error and nobody in it,
- * and looks for the fault in the destination. The cost of the route belongs in the answer the route
- * returns, not in a file the caller has no reason to open.
- */
-export const HANDS_FREE_ENTRY_WARNING =
-  `This entry skipped the client's own character-select screen, which is what client.${HOLD_SETTING_KEY}` +
-  ': false buys and what it costs. Measured 2026-08-19 and 2026-08-21: entering by this route leaves ' +
-  'the client with no player object -- no ship in orbit, player.position present:false, keepalive ' +
-  'spawn_state=0 -- and a destination launched from here loads correctly, with nobody in it: a black ' +
-  'screen and no error anywhere. Everything that does not need a body still works (console.*, mem.*, ' +
-  'the wire). For anything that does -- moving, seeing a destination, testing the world -- call ' +
-  `game_kill, set client.${HOLD_SETTING_KEY} back to true, and make the pick on the real screen ` +
-  '(game_enter with no character stops there, and input.hold drives it).';
+export const CHARACTER_ENTERED_MARKER = "Entering state 'setup:orbit'";
 
 /**
  * A `character` argument that named something. Split from the union below so every function that
@@ -259,202 +223,6 @@ export function describeRoster(roster: Roster): string {
   return roster.characters.map(describeCharacter).join(', ');
 }
 
-/** What a rewrite of the hold flag found in, and did to, a settings file's text. */
-export interface HoldSettingRewrite {
-  /** How many times the key appears. A valid settings file has exactly one. */
-  occurrences: number;
-  /** The value the file carried, or null when the key is absent. */
-  previous: boolean | null;
-  /** The text to write back. Identical to the input unless `changed` is true. */
-  text: string;
-  changed: boolean;
-}
-
-/**
- * Turns `"hold_character_select": true` into `false` in a settings file's text, and nothing else.
- *
- * A single-token substitution rather than `JSON.parse`/`stringify` on purpose. The file is ~74 KB of
- * a user's own configuration, with its own key order, indentation and one-line objects; round-tripping
- * it through a parser would rewrite every byte of it to serve a one-word change, and would silently
- * drop anything the parser normalizes. This touches the six characters that have to change.
- *
- * Absence and duplication are reported rather than repaired, and the caller refuses on both. An
- * absent key means the C++ default applies (`holdCharacterSelect{true}` in
- * `core/settings/client/definition.h`), so the hold is on and a value has to be *added* — which
- * means synthesizing structure in a file this has no business restructuring. Two occurrences mean
- * the game's own parser already rejects the file (it refuses a duplicate key), so picking one to
- * edit would be guessing at which half of an already-broken file the game wanted.
- *
- * @param text The settings file exactly as read.
- * @returns What was found and the text to write back.
- */
-export function rewriteHoldCharacterSelect(text: string): HoldSettingRewrite {
-  const pattern = new RegExp(`"${HOLD_SETTING_KEY}"\\s*:\\s*(true|false)`, 'g');
-  const matches = [...text.matchAll(pattern)];
-  if (matches.length !== 1) {
-    return { occurrences: matches.length, previous: null, text, changed: false };
-  }
-  const match = matches[0];
-  if (match === undefined || match.index === undefined) {
-    return { occurrences: 0, previous: null, text, changed: false };
-  }
-  const previous = match[1] === 'true';
-  if (!previous) {
-    return { occurrences: 1, previous: false, text, changed: false };
-  }
-  const rewritten =
-    text.slice(0, match.index) + match[0].replace(/true$/, 'false') + text.slice(match.index + match[0].length);
-  return { occurrences: 1, previous: true, text: rewritten, changed: true };
-}
-
-/** What `disableCharacterSelectHold` did, reported to the caller verbatim in every response. */
-export interface HoldSettingResult {
-  status: 'alreadyOff' | 'turnedOff' | 'refused';
-  path: string;
-  /** The value found in the file, when there was one to find. */
-  previous?: boolean;
-  /** Where the untouched original was copied before the first write this server ever made. */
-  backupPath?: string;
-  message: string;
-}
-
-/** Where the untouched original goes, once, the first time this server changes the file. */
-export function holdSettingBackupPath(settingsPath: string): string {
-  return `${settingsPath}.sunrise-mcp-backup`;
-}
-
-/**
- * Makes sure the game will *not* hold the character-select screen on its next boot, by turning
- * `client.hold_character_select` off in settings.json.
- *
- * **This writes a file the user owns, and that is a deliberate choice.** The flag is read once, at
- * boot, by a hook the console cannot reach, so it is a boot-time input to `game_enter` in exactly
- * the way the game directory is — and the caller this whole feature exists for is an agent holding
- * six MCP tools and no filesystem access, for whom "edit this JSON yourself and call me back" is not
- * an instruction that can be followed. Refusing would have made the feature unreachable by its own
- * audience, which is the defect it was built to remove.
- *
- * What makes the write acceptable is that it is neither silent nor lossy. The result names the file,
- * the key, the value found and the value written, and `game_enter` puts that object in every
- * response that caused a change. The whole original file is copied to
- * `settings.json.sunrise-mcp-backup` before the first write and never overwritten after, so the
- * pre-Sunrise-MCP state survives every later call. The edit itself is one token in ~74 KB. And it
- * happens only when a caller actually asked for a character and only when the flag is not already
- * off.
- *
- * It deliberately does **not** put the flag back afterwards. The value is read at boot, so restoring
- * it after the launch would mean every single call had to flip it again, and a crash between flip
- * and restore would leave it flipped anyway — a restore would buy a guarantee it cannot keep, at the
- * cost of making the reported state ("this is now off") false.
- *
- * @param settingsPath The game's settings.json.
- * @returns What was found and what was done. `refused` means nothing was written and the message
- *          says what a human has to change.
- */
-export async function disableCharacterSelectHold(settingsPath: string): Promise<HoldSettingResult> {
-  let text: string;
-  try {
-    text = await readFile(settingsPath, 'utf8');
-  } catch (err) {
-    return {
-      status: 'refused',
-      path: settingsPath,
-      message:
-        `Could not read the game's settings at ${settingsPath} ` +
-        `(${err instanceof Error ? err.message : String(err)}). That file has to carry ` +
-        `"${HOLD_SETTING_KEY}": false under "client" for a chosen character to reach the game, ` +
-        'because the flag is read once at boot by a hook the console cannot reach. Nothing was ' +
-        'launched.',
-    };
-  }
-
-  const rewrite = rewriteHoldCharacterSelect(text);
-  if (rewrite.occurrences === 0) {
-    // Why the same missing key gets two different answers. `hold_character_select` is an addition of
-    // the private fork, and so is `console_endpoint`; a settings file with neither was written by a
-    // build that has no console endpoint at all, which makes "add this key by hand" advice that
-    // cannot work -- the DLL that would read it is not there. Telling those two apart is the
-    // difference between naming the cause and describing a symptom, and describing the symptom is
-    // exactly what the first outside user of this server was handed.
-    const looksLikeFork = readSettings(text).hasConsoleEndpoint;
-    return {
-      status: 'refused',
-      path: settingsPath,
-      message: looksLikeFork
-        ? `${settingsPath} has no "${HOLD_SETTING_KEY}" key, and the game's own default for it is ` +
-          'true, which parks the client on the character-select screen no matter what character is ' +
-          `chosen. Add "${HOLD_SETTING_KEY}": false to the "client" object in that file and call ` +
-          'game_enter again. This was not added automatically: the key is absent, so adding it means ' +
-          'editing the shape of a configuration file rather than one value in it. Nothing was launched.'
-        : `${settingsPath} carries neither "${HOLD_SETTING_KEY}" nor "console_endpoint". Both are ` +
-          'additions of the private Sunrise fork this server pairs with, so this install was built ' +
-          'from upstream Sunrise or another fork, and nothing this server drives exists in it -- ' +
-          'there is no console endpoint to connect to, and adding the key by hand would change ' +
-          'nothing because no code reads it. Deploy a steam_api64.dll built from the fork; ' +
-          'install_check reports the same thing in full. Nothing was launched.',
-    };
-  }
-  if (rewrite.occurrences > 1) {
-    return {
-      status: 'refused',
-      path: settingsPath,
-      message:
-        `${settingsPath} carries "${HOLD_SETTING_KEY}" ${rewrite.occurrences} times. The game's own ` +
-        'settings parser rejects a duplicated key, so that file is already not being read the way ' +
-        'it looks; nothing was changed and nothing was launched. Leave exactly one, set to false.',
-    };
-  }
-  if (!rewrite.changed) {
-    return {
-      status: 'alreadyOff',
-      path: settingsPath,
-      previous: false,
-      message: `"${HOLD_SETTING_KEY}" was already false; the settings file was not touched.`,
-    };
-  }
-
-  const backupPath = holdSettingBackupPath(settingsPath);
-  try {
-    // Written once and never again: the point of it is the state before this server ever touched
-    // the file, which a backup refreshed on every call would destroy on the second one.
-    let backupExists = true;
-    try {
-      await stat(backupPath);
-    } catch {
-      backupExists = false;
-    }
-    if (!backupExists) await copyFile(settingsPath, backupPath);
-
-    // Temp-then-rename, like press-record.ts: the game reads this file at boot, and a crash
-    // mid-write would otherwise leave it unparseable and the game unlaunchable.
-    const tmpPath = `${settingsPath}.${process.pid}.tmp`;
-    await writeFile(tmpPath, rewrite.text, 'utf8');
-    await rename(tmpPath, settingsPath);
-  } catch (err) {
-    return {
-      status: 'refused',
-      path: settingsPath,
-      previous: true,
-      message:
-        `"${HOLD_SETTING_KEY}" is true in ${settingsPath} and could not be turned off ` +
-        `(${err instanceof Error ? err.message : String(err)}). While it is true the client parks ` +
-        'on the character-select screen whatever character is chosen. Set it to false by hand and ' +
-        'call game_enter again. Nothing was launched.',
-    };
-  }
-
-  return {
-    status: 'turnedOff',
-    path: settingsPath,
-    previous: true,
-    backupPath,
-    message:
-      `"${HOLD_SETTING_KEY}" was true in ${settingsPath} and this call set it to false, because a ` +
-      'chosen character cannot reach the client while it is true. The value is read at boot, so it ' +
-      `is left false rather than restored. The original file was copied to ${backupPath}.`,
-  };
-}
-
 /**
  * The line sunrise.log emits when the client enters BAP sign-in — the deadline for a pick.
  *
@@ -489,9 +257,7 @@ export const SIGN_IN_MARKER = "Entering state 'bootflow:bap_signin'";
  * reads a stale file. That is a whole-tool precondition, not something these three reads introduce.
  *
  * Where an anchor is available for free it is still used (the title-screen wait after a fresh launch
- * keeps its `sinceOffset`), because a redundant guard costs nothing. Where one is not — the hold-hook
- * line is written ~3.5s into a boot, which can be before `launchGame` returns — the whole-file read
- * is the correct one and the rotation above is what makes it sound. The `SIGN_IN_MARKER` gate needs
+ * keeps its `sinceOffset`), because a redundant guard costs nothing. The `SIGN_IN_MARKER` gate needs
  * neither: it is only ever read *after* `character.list` has answered, and the endpoint cannot answer
  * until the running process's own DLL has initialized, which is after that process rotated the file.
  */
@@ -628,10 +394,10 @@ export function decideCharacterStep(obs: CharacterStepObservation): CharacterSte
   if (obs.signInStarted) {
     // The tail of this sentence is entry-specific, and that is not a nicety. Reaching here on the
     // launch branch means launchGame() has already run -- launch-game.ts's script does
-    // `Get-Process destiny2 | Stop-Process -Force` and starts a new instance -- and, when the hold
-    // flag had been on, settings.json has already been rewritten and a backup left beside it. The
-    // response carries that settings object, so a blanket "nothing was changed" would contradict
-    // its own payload in the same JSON.
+    // `Get-Process destiny2 | Stop-Process -Force` and starts a new instance -- and, when mcp.json
+    // did not switch the endpoint on, that file has already been written and a backup left beside
+    // it. The response carries that settings object, so a blanket "nothing was changed" would
+    // contradict its own payload in the same JSON.
     const aftermath =
       obs.entry === 'launch'
         ? 'This call pressed nothing and picked nothing. It had already restarted the game before it got ' +
@@ -773,9 +539,9 @@ export function decideCharacterVerdict(obs: CharacterVerdictObservation): Charac
       message:
         `The ${who} is selected on the server, but "${CHARACTER_ENTERED_MARKER}" never appeared in ` +
         `sunrise.log${waited}, which means the client is still sitting on the character-selection screen rather ` +
-        `than having walked through it. The usual cause is "${HOLD_SETTING_KEY}" having been true in the ` +
-        "game's settings when this instance booted -- it is read once at startup. Call game_kill, then " +
-        'game_enter with the same character again; that path turns the flag off before launching.',
+        'than having walked through it. On Sunrise 0.5.1 a pick made before sign-in walks through that ' +
+        'screen on its own, so this means the pick did not reach the account image the client was sent. ' +
+        'Call game_kill, then game_enter with the same character again, or click the card on the screen.',
     };
   }
 
