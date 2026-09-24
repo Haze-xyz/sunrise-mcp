@@ -1,18 +1,41 @@
 Deep reference and measurement log, moved out of the README to keep the front door clean. This is
 the hard-won detail behind the tools.
 
-## Console primitives beyond the base tools (`input.*`, `mem.*`, `bootflow.character_step`)
+It is a log: every measurement below carries the date it was taken, and those before 2026-09-24
+were taken on Sunrise before 0.5, with the C++ layer spread through upstream's tree. The next
+section says what moved when the layer was ported to Sunrise 0.5.1. Where an older entry disagrees
+with it, it is the older entry that is out of date.
+
+## Sunrise 0.5.1 (measured 2026-09-24)
+
+- **The layer is a folder.** Everything is under `Sunrise/src/mcp/` on the `mcp` branch, with nine
+  upstream files calling into it (`src/mcp/README.md`). Its switch is `mcp.json` beside
+  `settings.json`: `{"endpoint":{"enabled":true}}`. `server.console_endpoint` in `settings.json` is
+  gone; so is `client.hold_character_select`, which 0.5.0 removed from upstream along with its hook,
+  and `bootflow.character_step`, which lived in that hook.
+- **The client parks on the character-selection screen on its own** when nobody has been picked:
+  `Entering state 'character:signin'` and nothing after it until a card is clicked. Clicking one
+  goes on to `'cleanup'` then `'setup:orbit'`, with the ship.
+- **A pick made before sign-in now costs nothing.** `character.select titan` at the title screen,
+  then Enter: 40 ms in `character:signin`, `'setup:orbit'`, orbit with the ship; a destination
+  launched from there (the Insert menu's Activity Launcher, EDZ) answered `player.position`
+  `present: true`, and `input.hold 69` for 3 s moved the character 17.9 units. Every entry below
+  that says a hands-free entry leaves no player object describes Sunrise before 0.5.
+- **0.5.1 writes no "Leaving state" line.** `game_enter` reads entry from `Entering state
+  'setup:orbit'`. `changed world to: orbit_d2` is still written before the selection screen as well
+  as after it.
+- **`core.logging.file_sink` ships off**, and upstream rewrites `settings.json` with that default
+  whenever the file's `version` is older than the build's (18 in 0.5.1). With it off there is no
+  `sunrise.log` and every log-reading tool here sees nothing; `install_check` says so.
+- **The console in the game is the "Console" page of the Insert menu**, with no key of its own.
+  `input.hold` is refused while that menu is open, as it was while the old console was.
+- **`console_describe` publishes each command's arguments** (an `arguments` array with name, type,
+  required, bounds and help). Older text here and in the tool descriptions said it did not.
+
+## Console primitives beyond the base tools (`input.*`, `mem.*`)
 
 `console_describe` returns every entry with its help text and bounds, and is the list to trust.
 What follows is what the help strings have no room for and an operator needs first.
-
-**`console_describe` does not publish argument metadata.** The endpoint's describe reply carries
-each entry's name, kind, help text and — for variables — type, bounds and choices. It does not
-carry the arguments a *command* declares, so describe tells you `character.select` exists and not
-that it takes one. That gap is filled from the TypeScript side: `console_run`'s own tool
-description carries the argument syntax for the entries where it matters. Closing it properly
-means teaching `encode_registry` in `console_protocol.cpp` to emit `arguments`, which is a change
-in the C++ repo, not this one.
 
 **`console_run` alone still cannot get past the title screen.** It *does* have key-input
 primitives now, and they are attached and answering `ok` at the title screen — but the title

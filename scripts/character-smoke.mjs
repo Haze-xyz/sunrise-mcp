@@ -696,11 +696,11 @@ async function main() {
         assert.match(kill.description, /failed/, 'and must document the status it returns when it is not');
 
         const describe = tools.find((tool) => tool.name === 'console_describe');
-        assert.match(
-          describe.description,
-          /does not publish the arguments/i,
-          'console_describe must admit it carries no argument metadata, or an agent will trust it to',
-        );
+        // The endpoint does publish each command's arguments (measured 2026-09-24: character.select,
+        // input.hold and mem.read all came back with an "arguments" array), so the description must
+        // say so rather than send an agent to guess.
+        assert.match(describe.description, /arguments each one\s+declares/i);
+        assert.doesNotMatch(describe.description, /does not publish the arguments/i);
       } finally {
         await client.close();
       }

@@ -778,10 +778,8 @@ server.registerTool(
       'a summary string, and rows of key/value pairs. The endpoint answers from the title screen, before the ' +
       'player presses anything, so this works before any load. The registry is console.*, log.*, movement.*, ' +
       'player.*, activity.*, character.*, and -- for driving and reverse-engineering the game from here -- ' +
-      'input.* and mem.*. Call console_describe for the authoritative list with help and bounds -- ' +
-      'but note it publishes each entry\'s name, kind, help and (for variables) type, bounds and choices, and NOT ' +
-      'the arguments a command takes, so what follows is both what an agent needs before deciding what to try and, ' +
-      'for these entries, the argument syntax describe does not carry. character.list takes no argument and reports ' +
+      'input.* and mem.*. Call console_describe for the authoritative list, with each command\'s arguments; ' +
+      'what follows is what an agent needs before deciding what to try. character.list takes no argument and reports ' +
       'the account\'s characters with their class, key and which one is selected; character.select ' +
       `<${CHARACTER_CLASSES.join('|')}, or an index into character.list> moves the server's selection. Do not choose a ` +
       'character from here unless you mean to: character.select answers ok whenever it is called, but only reaches ' +
@@ -827,10 +825,9 @@ server.registerTool(
   {
     description:
       'Returns the full Sunrise console registry: every command and variable, each with its name, kind, help ' +
-      'text, and — for variables — type and numeric bounds. Call this to discover what console_run accepts ' +
-      'before guessing at line syntax. One limit to know rather than discover the hard way: the endpoint does ' +
-      'not publish the arguments a command declares, only its help text, so this says which commands exist and ' +
-      'not what each one takes. Where an argument matters, console_run\'s own description carries the syntax.',
+      'text, and — for variables — type, numeric bounds and choices; for commands, the arguments each one ' +
+      'declares, with their type, whether they are required, bounds and help. Call this to discover what ' +
+      'console_run accepts before guessing at line syntax.',
   },
   withEndurance('console_describe', async (): Promise<CallToolResult> => {
     try {

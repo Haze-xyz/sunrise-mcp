@@ -92,7 +92,8 @@ separate from the committed fake-based suite for exactly that reason. When addin
 one that happens to satisfy the same assertions — see `NOTES.md`'s "On testing dispatch
 correctness" for a worked example of a test that initially couldn't.
 
-## Privacy / remotes
+## What it pairs with
 
-This repo is private. It pushes to a private `backup` remote only. Never `origin`, never a fork,
-never a PR — this is not published anywhere.
+The C++ side is the `mcp` branch of `Haze-xyz/Sunrise`: Sunrise 0.5.1 plus `Sunrise/src/mcp/` and
+the calls into it listed in that folder's README. Both are a snapshot on 0.5.1, not kept current
+with upstream. A change here that needs a new console entry needs a change there too.

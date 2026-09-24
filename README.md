@@ -15,42 +15,48 @@ rest work through the game process, its log, its settings file, its build, or th
 plus an extensible **capabilities** layer for composing them into richer tools without touching the
 game's C++ at all.
 
-## From nothing to a game that answers
+**Status: a snapshot, frozen on Sunrise 0.5.1.** It is not kept up to date with upstream Sunrise.
+Pull requests that bring it forward are welcome, with no promise about when they are looked at.
 
-Six steps. The whole thing is one evening, and every step has a command.
+## What it drives
+
+The tools talk to a console that lives inside the game, in a Sunrise DLL built from the
+[`mcp` branch of Haze-xyz/Sunrise](https://github.com/Haze-xyz/Sunrise/tree/mcp): upstream Sunrise
+plus one folder, `src/mcp/`, and about fifty lines that call into it. That branch's
+[`src/mcp/README.md`](https://github.com/Haze-xyz/Sunrise/blob/mcp/Sunrise/src/mcp/README.md) says
+what the layer is and how to add it to your own Sunrise checkout. Against a stock Sunrise build every
+tool here fails the same way, with a refused connection, because there is nothing to connect to.
+
+## From nothing to a game that answers
 
 ```bash
 # 1. this server
-git clone <sunrise-mcp> && cd sunrise-mcp && npm install && npm run build
+git clone https://github.com/Haze-xyz/sunrise-mcp && cd sunrise-mcp && npm install && npm run build
 
-# 2. put the fork's capability into your own Sunrise checkout -- 45 files it adds,
-#    34 of upstream's it changes, applied as one squashed change. Nothing is committed.
-node scripts/overlay-apply.mjs --repo <your Sunrise checkout>
+# 2. Sunrise with the MCP layer
+git clone -b mcp https://github.com/Haze-xyz/Sunrise
+cd Sunrise
+msbuild Sunrise.sln /m /v:normal /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64
+#    (without the last flag 0.5.1 can stop with C1060, "compiler is out of heap space")
 
-# 3. build the DLL, and copy it into bin\x64 -- NOT next to destiny2.exe. The game root is
-#    where the exe lives; the loader takes steam_api64.dll from bin\x64, and a DLL left at
-#    the root is simply never loaded. `dll_deploy` puts it in the right place for you.
-cd <your Sunrise checkout>
-msbuild Sunrise.sln /m /v:normal /p:Configuration=Release /p:Platform=x64
-#    build\x64\Release\steam_api64.dll  ->  <game dir>\bin\x64\steam_api64.dll
+# 3. copy build\x64\Release\steam_api64.dll into <game dir>\bin\x64\ -- NOT next to destiny2.exe:
+#    the loader takes it from bin\x64 and never loads one left at the game root.
+#    The dll_deploy tool puts it in the right place.
 
-# 4. turn the listener on. It ships OFF, and this is the step everyone misses:
-#    <game dir>\bin\x64\Sunrise\settings.json  ->  server > console_endpoint > "enabled": true
+# 4. switch the console endpoint on. It is off unless this file says otherwise:
+#    <game dir>\bin\x64\Sunrise\mcp.json  ->  {"endpoint":{"enabled":true}}
+#    (game_enter writes it for you)
 
-# 5. tell this server where the game is
+# 5. keep the game's log file on. Sunrise 0.5.1 ships it off, and log_read, wait_for and
+#    game_enter read that file:
+#    <game dir>\bin\x64\Sunrise\settings.json  ->  core > logging > "file_sink": true
+
+# 6. tell this server where the game is
 export SUNRISE_GAME_DIR='E:\Your\Destiny_Sunrise'
-
-# 6. check before believing anything
-node -e "import('./dist/install.js').then(m=>m.inspectInstall()).then(r=>console.log(r.verdict, r.message))"
 ```
 
-Step 6 is the one to run whenever something looks broken; as an MCP tool it is `install_check`. It
-answers `ok`, or names which of five things is wrong — and none of its answers is about the game.
-
-**Step 2 needs access to the fork**, which is private. There is no way around that: the console
-endpoint, `mem.*`, `character.*` and forced-key input are that fork's additions to
-`steam_api64.dll`, and upstream Sunrise has none of them. Against a stock install every tool here
-fails identically, with a refused connection.
+Then ask your MCP client to run `install_check`. It answers `ok`, or names which of five things is
+wrong, and none of its answers is about the game.
 
 ## What it needs
 
@@ -65,80 +71,35 @@ fails identically, with a refused connection.
   the wrong loopback).
 - Strict TypeScript throughout: `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
   no `any`, no `@ts-ignore`.
-- This repo is private. It pushes to a private `backup` remote only — never a public fork, never
-  upstream, never a PR.
 
 ## Configure
 
-Everything is env vars, with Windows-appropriate defaults:
+Everything is env vars:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `SUNRISE_ENDPOINT_HOST` | `127.0.0.1` | Host the console endpoint listens on. |
-| `SUNRISE_ENDPOINT_PORT` | `30975` | Port the console endpoint listens on. |
-| `SUNRISE_GAME_DIR` | `E:\Destiny_Sunrise` | Game install directory. `destiny2.exe` and the log both live under here. |
-| `SUNRISE_FORK_DIR` | *(none — refuses)* | The Sunrise fork checkout, for `sync-fork`. No default: a built-in path belongs to whoever wrote it. |
+| `SUNRISE_ENDPOINT_PORT` | `30975` | Port the console endpoint listens on. Match `endpoint.port` in `mcp.json` if you change it there. |
+| `SUNRISE_GAME_DIR` | `E:\Destiny_Sunrise` | Game install directory. That default is the author's machine; set your own. |
+| `SUNRISE_FORK_DIR` | *(none — refuses)* | Your Sunrise checkout, for `fork_build` and `dll_deploy` when no `repo` argument is given. |
 | `SUNRISE_MSBUILD` | *(found via vswhere)* | An explicit `MSBuild.exe`, when vswhere finds the wrong install or none. |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | *(none — stays quiet)* | Where `sync-fork` sends its summary. Both must be set. |
 
 ## When nothing connects
 
-Run `install_check` first. Every other tool assumes a game directory, a settings file at one exact
-path, and keys in it that only the fork's DLL has — and when an assumption is wrong they report a
-*game* failure rather than the configuration problem it is.
+Run `install_check` first. Every other tool assumes a game directory, a DLL with the MCP layer and
+an `mcp.json` that switches its endpoint on, and when an assumption is wrong they report a *game*
+failure rather than the configuration problem it is.
 
-The two answers worth knowing in advance:
+- **`notMcpBuild`** — there is no `bin\x64\steam_api64.dll`, or it was built without the layer
+  (it is recognised by the menu page the layer registers, `mcp.console`). A DLL left beside
+  `destiny2.exe` at the game root is never loaded, so check `bin\x64` before rebuilding anything.
+- **`mcpConfigMissing`**, **`mcpConfigInvalid`**, **`endpointDisabled`** — the layer is there and
+  its endpoint is off. Write `{"endpoint":{"enabled":true}}` to `bin\x64\Sunrise\mcp.json` and
+  restart the game; `game_enter` does it before launching.
 
-- **`endpointDisabled`** — the fork ships `"console_endpoint": { "enabled": false }`. A clean
-  install of the fork therefore has no listener, and every tool here fails with a refused
-  connection while nothing in the game is wrong. Set `"enabled": true` under `server` >
-  `console_endpoint` in `<game dir>\bin\x64\Sunrise\settings.json` and restart the game.
-- **`notForkBuild`** — the settings carry neither `console_endpoint` nor
-  `hold_character_select`, so no fork DLL has run in this install and nothing this server drives
-  exists in it. Adding the keys by hand changes nothing; no code reads them. **Two different
-  mistakes land here and the verdict cannot tell them apart**: the DLL really is a stock build, or
-  it is the right build in the wrong folder. The loader takes `steam_api64.dll` from
-  `<game dir>\bin\x64`, so one left beside `destiny2.exe` at the game root is never loaded, Sunrise
-  never writes its keys, and the settings look exactly like a stock install's. Check
-  `<game dir>\bin\x64\steam_api64.dll` before rebuilding anything.
-
-`install_check` also reports the settings `version` field. The game migrates that file on its own
-(upstream's `settings_upgrade.h`, bundled default 6 → 8), so a file written by a newer build is not
-a broken one — and this server no longer treats it as such.
-
-## Keeping the fork current
-
-Every tool here talks to a DLL built from the Sunrise fork, so a fork that has fallen behind
-upstream is a server answering about a game nobody else runs. Measured on 2026-08-23: six days of
-drift was 43 upstream commits, 352 files and 3 conflicting ones. The same drift left for three
-months is a project, not an afternoon.
-
-```
-npm run sync-fork -- --repo <fork checkout>      # or set SUNRISE_FORK_DIR
-```
-
-It fetches upstream, merges **in a throwaway worktree**, builds with MSBuild, and moves your branch
-onto the result only when the build is green. It never resolves a conflict, and a failed run leaves
-your checkout exactly as it found it.
-
-| Outcome | What it means | Exit | Pings |
-|---|---|---|---|
-| `upToDate` | nothing upstream | 0 | — |
-| `ready` | merged cleanly and compiles | 0 | — |
-| `mergedNotBuilt` | merged cleanly, no build run, so unproven | 0 | yes |
-| `dirty` | you have uncommitted changes, so nothing was touched | 1 | yes |
-| `conflict` | the conflicting files are named; nothing was published | 1 | yes |
-| `buildFailed` | merged cleanly, does not compile; nothing was published | 1 | yes |
-
-A message is sent only when the run needs someone. The Actions history already carries green and
-red, and GitHub mails a failed run on its own; Telegram is for putting the *reason* in front of
-someone who is not looking at a dashboard. `mergedNotBuilt` pings despite exiting 0 — on the
-scheduled job it can only mean MSBuild went missing from the runner, so the build silently stopped
-being proof of anything.
-
-Flags: `--no-build`, `--no-publish`, `--push`, `--json`. With `TELEGRAM_BOT_TOKEN` and
-`TELEGRAM_CHAT_ID` set, the same summary is sent to Telegram; with neither, it says so and carries
-on.
+Its `settings.notes` also say when `core.logging.file_sink` is off in Sunrise's `settings.json`.
+Sunrise 0.5.1 rewrites that file with its own default, file sink off, whenever the file's `version`
+is older than the build's, so a log that silently stopped is worth checking there.
 
 ## Run it / connect an MCP client
 
@@ -169,31 +130,27 @@ its build, or the on-disk journal:
 |---|---|---|
 | `console_run` | `line: string` | The endpoint's structured response: `status`, `summary`, `rows`. |
 | `console_describe` | — | The full command/variable registry. |
-| `install_check` | — | What this install actually is, before believing any other tool's failure: `ok`, `gameDirNotFound`, `settingsMissing`, `settingsUnreadable`, `notForkBuild`, or `endpointDisabled`. Touches nothing. |
+| `install_check` | — | What this install actually is, before believing any other tool's failure: `ok`, `gameDirNotFound`, `notMcpBuild`, `mcpConfigMissing`, `mcpConfigInvalid`, or `endpointDisabled`. Touches nothing. |
 | `game_launch` | — | Starts `destiny2.exe` (killing any existing instance first) and waits for its window. |
 | `game_kill` | — | `taskkill /IM destiny2.exe /F`, then waits for the process to actually leave the process table. Safe to call when the game isn't running. |
 | `log_read` | `lines?: number`, `since?: string`, `filter?: {ev?, level?, channel?, text?}`, `mode?: 'lines' \| 'digest'`, `rareThreshold?: number` | With none of the new arguments, the tail of `sunrise.log` (default 200 lines, capped at 1000), unchanged. `since` (a previous call's `cursor`) reads only what's new and reports `rotated` across a restart. `filter` keeps only matching lines. `mode: "digest"` returns counts instead of lines, with rare events — and every warn/error — quoted verbatim. |
-| `game_enter` | `character?: string` | Launches if needed, gets past the title screen, and waits for the world to load. With a character named, enters the world as that character and reports which one actually got in; without one, leaves the game at character selection. |
+| `game_enter` | `character?: string` | Makes sure `mcp.json` switches the endpoint on, launches if needed, gets past the title screen, and waits for the world to load. With a character named, enters orbit as that character and reports which one actually got in; without one, leaves the game at character selection. |
 | `wait_for` | `ev?`, `level?`, `channel?`, `text?`, `count?`, `timeoutMs?`, `since?` | Blocks until a matching log line appears, then returns it plus a digest of everything else read while waiting. Use instead of polling `log_read`. |
-| `fork_build` | `repo?: string` | Compiles the Sunrise fork (Release x64) and reports whether it built, without touching the running game. |
-| `dll_deploy` | `repo?: string` | Copies the fork's freshly built `steam_api64.dll` into the install's `bin\x64`. Refuses while `destiny2.exe` is running. |
+| `fork_build` | `repo?: string` | Compiles your Sunrise checkout (Release x64) and reports whether it built, without touching the running game. |
+| `dll_deploy` | `repo?: string` | Copies your checkout's freshly built `steam_api64.dll` into the install's `bin\x64`. Refuses while `destiny2.exe` is running. |
 | `journal_note` | `text: string`, `kind?` | Writes one line to the on-disk journal, so it survives this session dying. |
 | `journal_resume` | — | What previous sessions left behind: goal, findings, crashes, last character, log cursor. |
 
 `console_describe` is authoritative for which console entries exist (`console.*`, `log.*`,
-`movement.*`, `player.*`, `input.*`, `mem.*`, `character.*`, `bootflow.character_step`, and more
-as the C++ side grows). The behavior that isn't in a help string — forced-key input, the memory
+`movement.*`, `player.*`, `activity.*`, `input.*`, `mem.*`, `character.*`). The behavior that isn't in a help string — forced-key input, the memory
 primitives' gates and blind spots, why `game_enter` owns its own ordering, the wire protocol
 itself — is in `NOTES.md`, not repeated here.
 
-> **Known limit — hands-free entry has no spawn.** `game_enter { character }` sets
-> `client.hold_character_select = false` so it can pick the character and get in without the
-> character screen. But entering that way lands the client in **orbit with no spawned body**:
-> `player.position` returns `present: false` and there is nothing in the world to drive. Measured
-> 2026-08-21 — a `game_enter { character: "warlock" }` reached orbit (`world_controller … falling
-> back to a new character`) with no local player. A spawned, moveable player still needs the real
-> character screen, which this path skips; `hold_character_select = false` also persists in the
-> settings file, so restore it to `true` afterward or a later normal launch enters broken too.
+> **Entering as a named character.** `game_enter { character }` makes the pick before the game
+> signs in, so the client walks through the selection screen on its own. On Sunrise 0.5.1 that
+> arrives in orbit with the ship, and a destination launched from there has a player in it:
+> measured 2026-09-24, `player.position` answered `present: true` in the EDZ and a held key moved
+> the character 17.9 units in 3 seconds. Before 0.5 the same route left no player at all.
 
 ## Capabilities (the plugin layer)
 
@@ -276,6 +233,8 @@ npm run typecheck        # tsc --noEmit, same strictness, no emit
 npm run test:capabilities  # builds, then runs the capability smoke scripts against fake ctx
 npm run test:endpoint    # the endpoint client against fake TCP servers
 npm run test:keys        # game_enter's decision logic, against a temp log file
+npm run test:install     # install_check and mcp.json, against fixtures
+npm run test:build       # fork_build's arguments and verdict
 npm run smoke             # needs a running game + Windows node
 ```
 
