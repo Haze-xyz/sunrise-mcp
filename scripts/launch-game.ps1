@@ -1,6 +1,6 @@
 <#
-  Launches destiny2.exe and waits for its window, mirroring the launch+wait steps of
-  tools/capture-game.ps1 (see a local capture script) — same kill
+  Launches destiny2.exe and waits for its window, mirroring the launch+wait steps of a local
+  capture script, capture-game.ps1 — same kill
   existing / Start-Process -PassThru / poll MainWindowHandle shape. This script deliberately drops
   capture-game.ps1's later steps (the boot-settle sleep, image dump, and closing the game again):
   the MCP game_launch tool wants the game left running so an agent can talk to the console
